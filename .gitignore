@@ -234,13 +234,14 @@ lerna-debug.log*
 # shared with a team, so only uncomment them if they are local-only in your
 # project.
 
-# GEMINI.md
-# WARP.md
-# CRUSH.md
-# QWEN.md
+GEMINI.md
+WARP.md
+CRUSH.md
+QWEN.md
+CLAUDE.md
 
 # OpenAI Codex
-# AGENTS.md
+AGENTS.md
 # .codex/
 
 # Aider
@@ -307,3 +308,35 @@ gemini-debug.log
 
 # Built Visual Studio Code Extensions
 *.vsix
+
+# Firebase build and deployment files
+/firebase-debug.log
+/firebase-debug.*.log
+.firebaserc
+
+# Firebase Hosting
+/firebase.json
+*.cache
+hosting/.cache
+
+# Firebase Functions
+/functions/node_modules/
+/functions/.env
+/functions/package-lock.json
+
+# Firebase Emulators
+/firebase-*.zip
+/.firebase/
+/emulator-ui/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment files (local configs)
+/.env.*
+
+firebase_adminsdk.json
+.passwords

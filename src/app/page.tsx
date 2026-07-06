@@ -1,11 +1,12 @@
-import { LoginForm } from "@/components/login-form"
+import { getCurrentUser } from "@/lib/get-current-user";
+import { redirect } from "next/navigation";
 
-export default function Page() {
-  return (
-    <div className="flex min-h-svh w-full items-center justify-center p-6 md:p-10">
-      <div className="w-full max-w-sm">
-        <LoginForm />
-      </div>
-    </div>
-  )
+export default async function HomePage() {
+  const user = await getCurrentUser();
+
+  if (user) {
+    redirect("/recordings");
+  }
+
+  redirect("/login");
 }
