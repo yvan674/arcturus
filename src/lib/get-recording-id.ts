@@ -10,8 +10,8 @@ const isFirestoreAutoId = (id: string) => /^[A-Za-z0-9]{20}$/.test(id);
  * @returns The activity ID as a string.
  */
 export function useRecordingId(): string {
-  const params = useParams<{ activityId: string | string[] }>();
-  const value = params.activityId;
+  const params = useParams<{ recordingId: string | string[] }>();
+  const value = params.recordingId;
 
   let assumedValue: string | null;
 

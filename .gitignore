@@ -243,6 +243,8 @@ CLAUDE.md
 # OpenAI Codex
 AGENTS.md
 # .codex/
+.agents/*
+skills-lock.json
 
 # Aider
 .aider.input.history

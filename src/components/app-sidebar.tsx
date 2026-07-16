@@ -11,68 +11,29 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
-import { LogOut } from "lucide-react";
+import { LogOut, Plus } from "lucide-react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Spinner } from "./ui/spinner";
 import Link from "next/link";
+import {
+  useRecordingsList,
+  type RecordingStatus,
+} from "@/lib/recordings-store";
+
+const STATUS_HINTS: Record<RecordingStatus, string> = {
+  new: "Not started",
+  live: "Live",
+  "live-ended": "Recorded",
+  refining: "Processing…",
+  refined: "Reviewed",
+  "refine-error": "Failed",
+};
 
 export function AppSidebar() {
   const router = useRouter();
-
-  const recordings = [
-    {
-      name: "William Smith",
-      recordingId: "y25bI1paeFWsVi3fzAww",
-      date: "09:34 AM",
-    },
-    {
-      name: "Alice Smith",
-      recordingId: "2",
-      date: "Yesterday",
-    },
-    {
-      name: "Bob Johnson",
-      recordingId: "3",
-      date: "2 days ago",
-    },
-    {
-      name: "Emily Davis",
-      recordingId: "4",
-      date: "2 days ago",
-    },
-    {
-      name: "Michael Wilson",
-      recordingId: "5",
-      date: "1 week ago",
-    },
-    {
-      name: "Sarah Brown",
-      recordingId: "6",
-      date: "1 week ago",
-    },
-    {
-      name: "David Lee",
-      recordingId: "7",
-      date: "1 week ago",
-    },
-    {
-      name: "Olivia Wilson",
-      recordingId: "8",
-      date: "1 week ago",
-    },
-    {
-      name: "James Martin",
-      recordingId: "9",
-      date: "1 week ago",
-    },
-    {
-      name: "Sophia White",
-      recordingId: "10",
-      date: "1 week ago",
-    },
-  ];
+  const recordings = useRecordingsList();
 
   const [isSigningOut, setIsSigningOut] = useState(false);
 
@@ -118,15 +79,34 @@ export function AppSidebar() {
       <SidebarContent>
         <SidebarGroup>
           <SidebarGroupContent>
+            <Link
+              href="/recordings"
+              className="flex items-center gap-2 border-b p-4 text-sm font-medium hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+            >
+              <Plus className="size-4" />
+              New recording
+            </Link>
+            {recordings.length === 0 && (
+              <p className="p-4 text-xs text-muted-foreground">
+                No recordings yet. Recordings live in memory for now and are
+                lost on reload.
+              </p>
+            )}
             {recordings.map((recording) => (
               <Link
-                href={`/recordings/${recording.recordingId}/`}
-                key={recording.recordingId}
+                href={`/recordings/${recording.id}`}
+                key={recording.id}
                 className="flex flex-col items-start gap-2 border-b p-4 text-sm leading-tight whitespace-nowrap last:border-b-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
               >
                 <div className="flex w-full items-center gap-2">
-                  <span className="font-medium">{recording.name}</span>{" "}
-                  <span className="ml-auto text-xs">{recording.date}</span>
+                  <span className="font-medium">{recording.title}</span>
+                  <span className="ml-auto text-xs text-muted-foreground">
+                    {STATUS_HINTS[recording.status]} ·{" "}
+                    {new Date(recording.createdAt).toLocaleTimeString(
+                      undefined,
+                      { hour: "2-digit", minute: "2-digit" },
+                    )}
+                  </span>
                 </div>
               </Link>
             ))}
