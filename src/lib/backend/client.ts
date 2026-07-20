@@ -4,7 +4,7 @@ const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
 
 /** Maximum audio size accepted by POST /v1/refine. */
-export const MAX_REFINE_BYTES = 100 * 1024 * 1024;
+export const MAX_REFINE_BYTES = 25 * 1024 * 1024;
 
 /** WebSocket URL for the live transcription session. */
 export function liveSessionUrl(): string {
@@ -20,7 +20,7 @@ export async function refineRecording(
   speakers: SpeakerConfig[],
 ): Promise<RefineResult> {
   if (audio.size > MAX_REFINE_BYTES) {
-    throw new Error("Recording is larger than the 100 MB limit.");
+    throw new Error("Recording is larger than the 25 MB limit.");
   }
 
   const form = new FormData();
@@ -42,7 +42,7 @@ export async function refineRecording(
 async function refineErrorMessage(res: Response): Promise<string> {
   switch (res.status) {
     case 413:
-      return "Recording is larger than the 100 MB limit.";
+      return "Recording is larger than the 25 MB limit.";
     case 422:
       return "The backend could not read the recording or its configuration.";
     case 503:

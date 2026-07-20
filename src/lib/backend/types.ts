@@ -18,7 +18,12 @@ export interface SpeakerConfig {
 /** Text frame sent once after opening WS /v1/live. */
 export interface SessionStartMessage {
   type: "session.start";
-  speakers: SpeakerConfig[];
+  /**
+   * Upper bound on how many distinct voices the diarizer looks for. The server
+   * does not know who the participants are — segments come back with anonymous
+   * voice labels (e.g. SPEAKER_00) and mapping them to people is our job.
+   */
+  max_speakers: number;
   /**
    * Everything gets translated into each of these languages (≥ 1). Each entry
    * costs one upstream translation session, so keep it to what we render.
@@ -48,15 +53,14 @@ export type LiveServerEvent =
        * pace: an entry may be missing here and show up in a later upsert.
        */
       translations: Record<string, string>;
+      /** Anonymous voice label (e.g. SPEAKER_00), stable within the session. */
       speaker_id: string | null;
-      role: SpeakerRole | null;
       speaker_confidence: number | null;
     }
   | {
       type: "speaker.update";
       segment_id: string;
       speaker_id: string | null;
-      role: SpeakerRole | null;
       speaker_confidence: number | null;
     }
   | { type: "error"; code: string; message: string; recoverable: boolean }

@@ -12,32 +12,33 @@ import {
 import type { SpeakerConfig, SpeakerRole } from "@/lib/backend/types";
 import { cn } from "@/lib/utils";
 
+// Swiss national languages first (plus Turkish), then alphabetical.
 export const LANGUAGES: { code: string; label: string }[] = [
   { code: "de", label: "German" },
-  { code: "en", label: "English" },
   { code: "fr", label: "French" },
   { code: "it", label: "Italian" },
-  { code: "ar", label: "Arabic" },
   { code: "tr", label: "Turkish" },
-  { code: "es", label: "Spanish" },
-  { code: "pt", label: "Portuguese" },
   { code: "sq", label: "Albanian" },
-  { code: "sr", label: "Serbian" },
-  { code: "bs", label: "Bosnian" },
-  { code: "hr", label: "Croatian" },
-  { code: "ru", label: "Russian" },
-  { code: "uk", label: "Ukrainian" },
-  { code: "pl", label: "Polish" },
-  { code: "ro", label: "Romanian" },
-  { code: "ku", label: "Kurdish" },
-  { code: "fa", label: "Persian" },
-  { code: "ps", label: "Pashto" },
-  { code: "so", label: "Somali" },
-  { code: "ti", label: "Tigrinya" },
   { code: "am", label: "Amharic" },
+  { code: "ar", label: "Arabic" },
+  { code: "bs", label: "Bosnian" },
   { code: "zh", label: "Chinese" },
-  { code: "vi", label: "Vietnamese" },
+  { code: "hr", label: "Croatian" },
+  { code: "en", label: "English" },
+  { code: "ku", label: "Kurdish" },
+  { code: "ps", label: "Pashto" },
+  { code: "fa", label: "Persian" },
+  { code: "pl", label: "Polish" },
+  { code: "pt", label: "Portuguese" },
+  { code: "ro", label: "Romanian" },
+  { code: "ru", label: "Russian" },
+  { code: "sr", label: "Serbian" },
+  { code: "so", label: "Somali" },
+  { code: "es", label: "Spanish" },
   { code: "th", label: "Thai" },
+  { code: "ti", label: "Tigrinya" },
+  { code: "uk", label: "Ukrainian" },
+  { code: "vi", label: "Vietnamese" },
 ];
 
 export function languageLabel(code: string): string {
@@ -124,6 +125,14 @@ export function SpeakerConfigForm({
     });
   };
 
+  const addLanguage = (index: number) => {
+    const speaker = value.speakers[index];
+    // Never duplicate a language within one speaker.
+    const next = LANGUAGES.find((l) => !speaker.languages.includes(l.code));
+    if (!next) return;
+    updateSpeaker(index, { languages: [...speaker.languages, next.code] });
+  };
+
   const removeSpeaker = (index: number) => {
     if (value.speakers.length <= MIN_SPEAKERS) return;
     onChange({
@@ -195,7 +204,11 @@ export function SpeakerConfigForm({
                         })
                       }
                     >
-                      {LANGUAGES.map((l) => (
+                      {LANGUAGES.filter(
+                        (l) =>
+                          l.code === language ||
+                          !speaker.languages.includes(l.code),
+                      ).map((l) => (
                         <option key={l.code} value={l.code}>
                           {l.label}
                         </option>
@@ -224,11 +237,7 @@ export function SpeakerConfigForm({
                   <Button
                     variant="outline"
                     size="xs"
-                    onClick={() =>
-                      updateSpeaker(index, {
-                        languages: [...speaker.languages, "en"],
-                      })
-                    }
+                    onClick={() => addLanguage(index)}
                   >
                     <Plus data-icon="inline-start" />
                     Language

@@ -10,6 +10,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { useRecordingId } from "@/lib/get-recording-id";
 import {
   useRecording,
+  useRecordingsHydrated,
   type RecordingSession,
 } from "@/lib/recordings-store";
 
@@ -30,9 +31,18 @@ function defaultTab(recording: RecordingSession): TabValue {
 export default function RecordingPage() {
   const recordingId = useRecordingId();
   const recording = useRecording(recordingId);
+  const recordingsHydrated = useRecordingsHydrated();
 
   const [tab, setTab] = useState<TabValue | null>(null);
   const activeTab = tab ?? (recording ? defaultTab(recording) : "live");
+
+  if (!recordingsHydrated) {
+    return (
+      <div className="mx-auto mt-12 max-w-md text-center text-sm text-muted-foreground">
+        Loading recording…
+      </div>
+    );
+  }
 
   if (!recording) {
     return (
@@ -44,8 +54,7 @@ export default function RecordingPage() {
         </header>
         <div className="mx-auto mt-12 flex max-w-md flex-col items-center gap-4 text-center text-sm text-muted-foreground">
           <p>
-            This recording is not available. Recordings currently live in
-            memory only, so they are lost when the page reloads.
+            This recording is not available in this browser.
           </p>
           <Link
             href="/recordings"

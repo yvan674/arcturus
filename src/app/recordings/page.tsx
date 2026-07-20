@@ -31,7 +31,9 @@ export default function RecordingsStartPage() {
     if (!file) return;
     if (file.size > MAX_REFINE_BYTES) {
       setSelectedFile(null);
-      setFileError("This file is larger than the 100 MB limit.");
+      setFileError(
+        `This file is larger than the ${Math.floor(MAX_REFINE_BYTES / 1000 / 1000)} MB limit.`,
+      );
       return;
     }
     setFileError(null);

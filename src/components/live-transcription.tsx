@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { Languages, Mic, Square } from "lucide-react";
 
-import { formatAudioTime, roleMeta } from "@/components/speaker-meta";
+import { formatAudioTime } from "@/components/speaker-meta";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { useLiveSession } from "@/hooks/use-live-session";
@@ -16,9 +16,10 @@ import {
 import { cn } from "@/lib/utils";
 
 /**
- * The live session view: translation-app style bubbles that pop up as
- * speakers talk. Segments stay hidden until the backend can attribute them
- * to a speaker.
+ * The live session view: one bubble per completed segment, in audio order.
+ * Live speaker attribution is unreliable, so the UI shows none — the refined
+ * transcript is where speakers appear. Segments still in flight stream into a
+ * buffer at the bottom and become bubbles once segment.completed arrives.
  */
 export default function LiveTranscriptionView({
   recording,
@@ -45,23 +46,24 @@ export default function LiveTranscriptionView({
     }
   }, [recording.startedVia, recording.status, start]);
 
-  const segments = useMemo(() => {
+  const { completed, pending } = useMemo(() => {
     const all = Object.values(recording.liveSegments);
     return {
-      attributed: all
-        .filter((s) => s.completed && s.speakerId !== null)
+      completed: all
+        .filter((s) => s.completed)
         .sort((a, b) => (a.t0 ?? 0) - (b.t0 ?? 0)),
-      unattributedCount: all.filter(
-        (s) => s.completed && s.speakerId === null,
-      ).length,
-      transcribing: all.some((s) => !s.completed && s.sourceText.length > 0),
+      pending: all.filter((s) => !s.completed && s.sourceText.length > 0),
     };
   }, [recording.liveSegments]);
 
   const bottomRef = useRef<HTMLDivElement>(null);
+  const pendingTextLength = pending.reduce(
+    (n, s) => n + s.sourceText.length,
+    0,
+  );
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [segments.attributed.length, segments.transcribing]);
+  }, [completed.length, pendingTextLength]);
 
   const sessionOver =
     recording.status === "live-ended" ||
@@ -78,7 +80,7 @@ export default function LiveTranscriptionView({
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 pb-24">
+    <div className="mx-auto flex w-full max-w-2xl flex-col gap-4">
       <SessionToolbar
         status={status}
         error={error}
@@ -92,33 +94,22 @@ export default function LiveTranscriptionView({
         }}
       />
 
-      {segments.attributed.length === 0 && status === "live" && (
+      {completed.length === 0 && pending.length === 0 && status === "live" && (
         <EmptyState>
-          Listening — attributed speech will appear here as bubbles.
+          Listening — speech will appear here as bubbles.
         </EmptyState>
       )}
 
       <div className="flex flex-col gap-3">
-        {segments.attributed.map((segment) => (
+        {completed.map((segment) => (
           <SegmentBubble key={segment.segmentId} segment={segment} />
         ))}
-
-        {segments.transcribing && status === "live" && (
-          <div className="flex animate-pulse items-center gap-2 self-center rounded-full bg-muted px-4 py-1.5 text-xs text-muted-foreground">
-            <Mic className="size-3" />
-            Transcribing…
-          </div>
-        )}
-
-        {segments.unattributedCount > 0 && (
-          <p className="self-center text-xs text-muted-foreground">
-            {segments.unattributedCount} segment
-            {segments.unattributedCount > 1 ? "s" : ""} waiting for speaker
-            attribution
-          </p>
-        )}
       </div>
-      <div ref={bottomRef} />
+
+      {(status === "live" || status === "stopping") && (
+        <TranscriptionBuffer pending={pending} />
+      )}
+      <div ref={bottomRef} className="pb-20" />
     </div>
   );
 }
@@ -198,57 +189,69 @@ function SessionToolbar({
 }
 
 function SegmentBubble({ segment }: { segment: LiveSegment }) {
-  const meta = roleMeta(segment.role);
-  const translations = Object.entries(segment.translations)
-    .filter(([, text]) => text.length > 0)
-    .sort(([a], [b]) => a.localeCompare(b));
-  const Icon = meta.icon;
-  const lowConfidence =
-    segment.speakerConfidence !== null && segment.speakerConfidence < 0.5;
+  const translations = sortedTranslations(segment.translations);
 
   return (
-    <div
-      className={cn(
-        "flex max-w-[80%] flex-col gap-1 rounded-3xl px-4 py-3 shadow-sm ring-1 ring-foreground/5",
-        meta.bubbleClass,
-        meta.align === "start" && "self-start rounded-bl-md",
-        meta.align === "end" && "self-end rounded-br-md",
-        meta.align === "center" && "max-w-[70%] self-center",
+    <div className="flex max-w-[85%] flex-col gap-1 self-start rounded-3xl rounded-bl-md bg-muted px-4 py-3 shadow-sm ring-1 ring-foreground/5">
+      {segment.t0 !== null && (
+        <div className="text-xs font-medium text-muted-foreground">
+          {formatAudioTime(segment.t0)}
+        </div>
       )}
-    >
-      <div
-        className={cn(
-          "flex items-center gap-1.5 text-xs font-medium",
-          meta.labelClass,
-        )}
-      >
-        <Icon className="size-3.5" />
-        {meta.label}
-        {lowConfidence && (
-          <span className="font-normal text-muted-foreground">
-            · uncertain
-          </span>
-        )}
-        {segment.t0 !== null && (
-          <span className="font-normal text-muted-foreground">
-            · {formatAudioTime(segment.t0)}
-          </span>
-        )}
-      </div>
       <p className="text-base leading-snug">{segment.sourceText}</p>
       {translations.map(([language, text]) => (
-        <p
-          key={language}
-          className="mt-1 border-t border-foreground/10 pt-2 text-sm leading-snug text-muted-foreground italic"
-        >
-          <span className="mr-1.5 rounded-full bg-foreground/5 px-1.5 py-0.5 text-[10px] font-medium tracking-wide uppercase not-italic">
-            {languageLabel(language)}
-          </span>
-          {text}
-        </p>
+        <TranslationLine key={language} language={language} text={text} />
       ))}
     </div>
   );
+}
+
+/**
+ * The buffer at the bottom of the screen: segments the server is still
+ * transcribing, updating live as source and translation deltas arrive.
+ */
+function TranscriptionBuffer({ pending }: { pending: LiveSegment[] }) {
+  return (
+    <div className="sticky bottom-4 z-10 flex flex-col gap-3 rounded-3xl border bg-background/95 p-4 shadow-md backdrop-blur">
+      <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+        <Mic className={cn("size-3", pending.length > 0 && "animate-pulse")} />
+        {pending.length > 0 ? "Transcribing…" : "Listening…"}
+      </div>
+      {pending.map((segment) => (
+        <div key={segment.segmentId} className="flex flex-col gap-1">
+          <p className="text-base leading-snug">{segment.sourceText}</p>
+          {sortedTranslations(segment.translations).map(([language, text]) => (
+            <TranslationLine key={language} language={language} text={text} />
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TranslationLine({
+  language,
+  text,
+}: {
+  language: string;
+  text: string;
+}) {
+  return (
+    <p className="text-sm leading-snug text-muted-foreground italic">
+      <span className="mr-1.5 rounded-full bg-foreground/5 px-1.5 py-0.5 text-[10px] font-medium tracking-wide uppercase not-italic">
+        {languageLabel(language)}
+      </span>
+      {text}
+    </p>
+  );
+}
+
+function sortedTranslations(
+  translations: Record<string, string>,
+): [string, string][] {
+  return Object.entries(translations)
+    .filter(([, text]) => text.length > 0)
+    .sort(([a], [b]) => a.localeCompare(b));
 }
 
 function EmptyState({ children }: { children: React.ReactNode }) {

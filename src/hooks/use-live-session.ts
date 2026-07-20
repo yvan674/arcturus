@@ -118,7 +118,6 @@ export function useLiveSession(recordingId: string, speakers: SpeakerConfig[]) {
             sourceText: event.source_text,
             translations: event.translations,
             speakerId: event.speaker_id,
-            role: event.role,
             speakerConfidence: event.speaker_confidence,
             completed: true,
           });
@@ -127,7 +126,6 @@ export function useLiveSession(recordingId: string, speakers: SpeakerConfig[]) {
           upsertLiveSegment(recordingId, {
             segmentId: event.segment_id,
             speakerId: event.speaker_id,
-            role: event.role,
             speakerConfidence: event.speaker_confidence,
           });
           break;
@@ -201,7 +199,9 @@ export function useLiveSession(recordingId: string, speakers: SpeakerConfig[]) {
     ws.onopen = () => {
       const sessionStart: SessionStartMessage = {
         type: "session.start",
-        speakers,
+        // The diarizer only needs an upper bound on distinct voices; mapping
+        // its anonymous labels to people happens on our side (if at all).
+        max_speakers: Math.max(speakers.length, 1),
         // Translate into every language spoken in the room so all parties
         // can follow live.
         target_languages: [...new Set(speakers.flatMap((s) => s.languages))],

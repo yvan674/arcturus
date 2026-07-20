@@ -3,17 +3,14 @@
 import { useSyncExternalStore } from "react";
 
 import { refineRecording } from "./backend/client";
-import type {
-  RefineResult,
-  SpeakerConfig,
-  SpeakerRole,
-} from "./backend/types";
+import type { RefineResult, SpeakerConfig } from "./backend/types";
 
 /**
  * The backend is stateless, so the frontend is the source of truth for the
  * session config, the audio recording, every live event, and the refinement
- * result. This module keeps all of that in memory for the current browser
- * session (persistence comes later).
+ * result. The in-memory state is the React-facing cache; complete recording
+ * objects (including audio Blobs) are persisted in IndexedDB, while the small
+ * ordered id index is mirrored in localStorage.
  */
 
 export interface LiveSegment {
@@ -21,10 +18,14 @@ export interface LiveSegment {
   t0: number | null;
   t1: number | null;
   sourceText: string;
-  /** ISO 639-1 code → translated text received so far for that language. */
+  /**
+   * ISO 639-1 code → translated text for that language. Accumulated from
+   * deltas while the segment is in flight; replaced wholesale by the full
+   * translations of the first segment.completed (later completions merge).
+   */
   translations: Record<string, string>;
+  /** Anonymous voice label (e.g. SPEAKER_00), stable within the session. */
   speakerId: string | null;
-  role: SpeakerRole | null;
   speakerConfidence: number | null;
   /** False while only deltas have arrived for this segment. */
   completed: boolean;
@@ -63,9 +64,16 @@ interface StoreState {
   recordings: Record<string, RecordingSession>;
   /** Newest first. */
   order: string[];
+  hydrated: boolean;
 }
 
-let state: StoreState = { recordings: {}, order: [] };
+const DATABASE_NAME = "arcturus-recordings";
+const DATABASE_VERSION = 1;
+const RECORDINGS_OBJECT_STORE = "recordings";
+const ORDER_STORAGE_KEY = "arcturus.recordings.order.v1";
+const SCHEMA_STORAGE_KEY = "arcturus.recordings.schema";
+
+let state: StoreState = { recordings: {}, order: [], hydrated: false };
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -81,7 +89,11 @@ function getSnapshot(): StoreState {
   return state;
 }
 
-const EMPTY_STATE: StoreState = { recordings: {}, order: [] };
+const EMPTY_STATE: StoreState = {
+  recordings: {},
+  order: [],
+  hydrated: false,
+};
 
 function getServerSnapshot(): StoreState {
   return EMPTY_STATE;
@@ -94,6 +106,11 @@ export function useRecordingsList(): RecordingSession[] {
     getServerSnapshot,
   );
   return snapshot.order.map((id) => snapshot.recordings[id]);
+}
+
+export function useRecordingsHydrated(): boolean {
+  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
+    .hydrated;
 }
 
 export function useRecording(id: string): RecordingSession | undefined {
@@ -112,6 +129,125 @@ const ID_ALPHABET =
 function generateRecordingId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(20));
   return Array.from(bytes, (b) => ID_ALPHABET[b % ID_ALPHABET.length]).join("");
+}
+
+function openDatabase(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains(RECORDINGS_OBJECT_STORE)) {
+        database.createObjectStore(RECORDINGS_OBJECT_STORE, { keyPath: "id" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+const databasePromise =
+  typeof indexedDB === "undefined" ? null : openDatabase();
+
+function readStoredOrder(): string[] {
+  try {
+    const value = localStorage.getItem(ORDER_STORAGE_KEY);
+    if (!value) return [];
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((id): id is string => typeof id === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistOrder(): void {
+  try {
+    localStorage.setItem(ORDER_STORAGE_KEY, JSON.stringify(state.order));
+    localStorage.setItem(SCHEMA_STORAGE_KEY, String(DATABASE_VERSION));
+  } catch (error) {
+    console.warn("Could not persist the recordings index.", error);
+  }
+}
+
+function getAllPersistedRecordings(
+  database: IDBDatabase,
+): Promise<RecordingSession[]> {
+  return new Promise((resolve, reject) => {
+    const request = database
+      .transaction(RECORDINGS_OBJECT_STORE, "readonly")
+      .objectStore(RECORDINGS_OBJECT_STORE)
+      .getAll();
+    request.onsuccess = () => resolve(request.result as RecordingSession[]);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function persistRecording(recording: RecordingSession): void {
+  if (!databasePromise) return;
+
+  void databasePromise
+    .then(
+      (database) =>
+        new Promise<void>((resolve, reject) => {
+          const transaction = database.transaction(
+            RECORDINGS_OBJECT_STORE,
+            "readwrite",
+          );
+          transaction.objectStore(RECORDINGS_OBJECT_STORE).put(recording);
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () => reject(transaction.error);
+          transaction.onabort = () => reject(transaction.error);
+        }),
+    )
+    .catch((error) => {
+      console.warn("Could not persist recording.", error);
+    });
+}
+
+async function hydrateFromStorage(): Promise<void> {
+  if (!databasePromise) {
+    state = { ...state, hydrated: true };
+    emit();
+    return;
+  }
+
+  try {
+    const persisted = await getAllPersistedRecordings(await databasePromise);
+    const persistedRecordings = Object.fromEntries(
+      persisted.map((recording) => [recording.id, recording]),
+    );
+    const storedOrder = readStoredOrder();
+    const missingFromOrder = persisted
+      .filter((recording) => !storedOrder.includes(recording.id))
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .map((recording) => recording.id);
+
+    // Entries created while IndexedDB was loading take precedence.
+    const recordings = { ...persistedRecordings, ...state.recordings };
+    const order = [
+      ...state.order,
+      ...storedOrder,
+      ...missingFromOrder,
+    ].filter(
+      (id, index, ids) =>
+        recordings[id] !== undefined && ids.indexOf(id) === index,
+    );
+
+    state = { recordings, order, hydrated: true };
+    persistOrder();
+  } catch (error) {
+    console.warn("Could not load persisted recordings.", error);
+    state = { ...state, hydrated: true };
+  }
+
+  emit();
+}
+
+if (typeof window !== "undefined") {
+  void hydrateFromStorage();
+  void navigator.storage?.persist?.().catch(() => false);
 }
 
 export function createRecording(input: {
@@ -139,9 +275,12 @@ export function createRecording(input: {
   };
 
   state = {
+    ...state,
     recordings: { ...state.recordings, [recording.id]: recording },
     order: [recording.id, ...state.order],
   };
+  persistOrder();
+  persistRecording(recording);
   emit();
   return recording;
 }
@@ -153,10 +292,12 @@ export function updateRecording(
   const existing = state.recordings[id];
   if (!existing) return;
 
+  const updated = { ...existing, ...patch };
   state = {
     ...state,
-    recordings: { ...state.recordings, [id]: { ...existing, ...patch } },
+    recordings: { ...state.recordings, [id]: updated },
   };
+  persistRecording(updated);
   emit();
 }
 
@@ -175,10 +316,17 @@ export function upsertLiveSegment(
     sourceText: "",
     translations: {},
     speakerId: null,
-    role: null,
     speakerConfidence: null,
     completed: false,
   };
+
+  // The first segment.completed carries the authoritative full translations:
+  // drop what the deltas accumulated. Later completions of the same segment
+  // merge, since a language may still be missing early on.
+  const translations =
+    segment.completed && !existing.completed
+      ? { ...segment.translations }
+      : { ...existing.translations, ...segment.translations };
 
   updateRecording(recordingId, {
     liveSegments: {
@@ -186,9 +334,7 @@ export function upsertLiveSegment(
       [segment.segmentId]: {
         ...existing,
         ...segment,
-        // Languages arrive at their own pace: a re-sent segment.completed may
-        // still miss a language that already streamed in — merge, don't drop.
-        translations: { ...existing.translations, ...segment.translations },
+        translations,
       },
     },
   });
@@ -201,6 +347,8 @@ export function appendLiveSegmentSourceText(
   text: string,
 ): void {
   const existing = state.recordings[recordingId]?.liveSegments[segmentId];
+  // segment.completed already carried the full text; late deltas are stale.
+  if (existing?.completed) return;
   upsertLiveSegment(recordingId, {
     segmentId,
     sourceText: (existing?.sourceText ?? "") + text,
@@ -215,6 +363,9 @@ export function appendLiveSegmentTranslation(
   text: string,
 ): void {
   const existing = state.recordings[recordingId]?.liveSegments[segmentId];
+  // segment.completed already carried the full translations; late deltas
+  // are stale.
+  if (existing?.completed) return;
   upsertLiveSegment(recordingId, {
     segmentId,
     translations: { [language]: (existing?.translations[language] ?? "") + text },

@@ -18,6 +18,7 @@ import { useState } from "react";
 import { Spinner } from "./ui/spinner";
 import Link from "next/link";
 import {
+  useRecordingsHydrated,
   useRecordingsList,
   type RecordingStatus,
 } from "@/lib/recordings-store";
@@ -34,6 +35,7 @@ const STATUS_HINTS: Record<RecordingStatus, string> = {
 export function AppSidebar() {
   const router = useRouter();
   const recordings = useRecordingsList();
+  const recordingsHydrated = useRecordingsHydrated();
 
   const [isSigningOut, setIsSigningOut] = useState(false);
 
@@ -86,10 +88,14 @@ export function AppSidebar() {
               <Plus className="size-4" />
               New recording
             </Link>
-            {recordings.length === 0 && (
+            {!recordingsHydrated && (
               <p className="p-4 text-xs text-muted-foreground">
-                No recordings yet. Recordings live in memory for now and are
-                lost on reload.
+                Loading recordings…
+              </p>
+            )}
+            {recordingsHydrated && recordings.length === 0 && (
+              <p className="p-4 text-xs text-muted-foreground">
+                No recordings yet.
               </p>
             )}
             {recordings.map((recording) => (
