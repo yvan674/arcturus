@@ -9,8 +9,7 @@ import type {
   SpeakerConfig,
 } from "@/lib/backend/types";
 import {
-  appendLiveSegmentSourceText,
-  appendLiveSegmentTranslation,
+  setLiveSegmentSourceText,
   updateRecording,
   upsertLiveSegment,
 } from "@/lib/recordings-store";
@@ -100,15 +99,7 @@ export function useLiveSession(recordingId: string, speakers: SpeakerConfig[]) {
           break;
         }
         case "transcript.source.delta":
-          appendLiveSegmentSourceText(recordingId, event.segment_id, event.text);
-          break;
-        case "transcript.translation.delta":
-          appendLiveSegmentTranslation(
-            recordingId,
-            event.segment_id,
-            event.language,
-            event.text,
-          );
+          setLiveSegmentSourceText(recordingId, event.segment_id, event.text);
           break;
         case "segment.completed":
           upsertLiveSegment(recordingId, {
@@ -197,6 +188,9 @@ export function useLiveSession(recordingId: string, speakers: SpeakerConfig[]) {
     wsRef.current = ws;
 
     ws.onopen = () => {
+      // Every language any speaker may use; also biases Whisper's
+      // auto-detection via possible_languages.
+      const languages = [...new Set(speakers.flatMap((s) => s.languages))];
       const sessionStart: SessionStartMessage = {
         type: "session.start",
         // The diarizer only needs an upper bound on distinct voices; mapping
@@ -204,7 +198,8 @@ export function useLiveSession(recordingId: string, speakers: SpeakerConfig[]) {
         max_speakers: Math.max(speakers.length, 1),
         // Translate into every language spoken in the room so all parties
         // can follow live.
-        target_languages: [...new Set(speakers.flatMap((s) => s.languages))],
+        target_languages: languages,
+        possible_languages: languages,
         audio: { format: "webm-opus" },
       };
       ws.send(JSON.stringify(sessionStart));

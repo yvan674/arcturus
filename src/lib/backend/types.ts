@@ -29,17 +29,31 @@ export interface SessionStartMessage {
    * costs one upstream translation session, so keep it to what we render.
    */
   target_languages: string[];
+  /**
+   * ISO codes or language names that may be spoken (1–20 entries). Biases
+   * Whisper's auto-detection; does not limit it to this list.
+   */
+  possible_languages?: string[];
+  /**
+   * Extra Whisper prompt context (domain terms, participant names, preferred
+   * spellings), up to 500 characters. A soft hint, not guaranteed to be
+   * followed.
+   */
+  additional_instructions?: string;
   audio: { format: "webm-opus" | "pcm16-24k" };
 }
 
 /** Server → client events on WS /v1/live. */
 export type LiveServerEvent =
   | { type: "session.ready" }
-  | { type: "transcript.source.delta"; segment_id: string; text: string }
   | {
-      type: "transcript.translation.delta";
+      /**
+       * Upsert by segment_id: `text` is the latest full source hypothesis
+       * for the segment, replacing whatever was shown before — progressive
+       * Whisper hypotheses can revise earlier words, so never concatenate.
+       */
+      type: "transcript.source.delta";
       segment_id: string;
-      language: string;
       text: string;
     }
   | {
@@ -49,8 +63,10 @@ export type LiveServerEvent =
       t1: number;
       source_text: string;
       /**
-       * ISO 639-1 code → full translated text. Languages arrive at their own
-       * pace: an entry may be missing here and show up in a later upsert.
+       * ISO 639-1 code → full translated text, one entry per
+       * target_languages entry. Correction and all translations come from
+       * one async chat-completions call and arrive together here — this
+       * always fully replaces the segment, never merge with a prior value.
        */
       translations: Record<string, string>;
       /** Anonymous voice label (e.g. SPEAKER_00), stable within the session. */

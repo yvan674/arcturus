@@ -19,9 +19,9 @@ export interface LiveSegment {
   t1: number | null;
   sourceText: string;
   /**
-   * ISO 639-1 code → translated text for that language. Accumulated from
-   * deltas while the segment is in flight; replaced wholesale by the full
-   * translations of the first segment.completed (later completions merge).
+   * ISO 639-1 code → translated text for that language. Empty while the
+   * segment is only a live source hypothesis; set wholesale by
+   * segment.completed, which always carries the full map for that segment.
    */
   translations: Record<string, string>;
   /** Anonymous voice label (e.g. SPEAKER_00), stable within the session. */
@@ -320,13 +320,12 @@ export function upsertLiveSegment(
     completed: false,
   };
 
-  // The first segment.completed carries the authoritative full translations:
-  // drop what the deltas accumulated. Later completions of the same segment
-  // merge, since a language may still be missing early on.
-  const translations =
-    segment.completed && !existing.completed
-      ? { ...segment.translations }
-      : { ...existing.translations, ...segment.translations };
+  // segment.completed always carries the full, authoritative translations
+  // map for that segment (correction + every requested language come from
+  // one chat-completions call) — replace wholesale, never merge.
+  const translations = segment.translations
+    ? { ...segment.translations }
+    : existing.translations;
 
   updateRecording(recordingId, {
     liveSegments: {
@@ -340,36 +339,20 @@ export function upsertLiveSegment(
   });
 }
 
-/** Append delta text to a segment's source transcript. */
-export function appendLiveSegmentSourceText(
+/**
+ * Set a segment's live source hypothesis from transcript.source.delta.
+ * `text` is the latest full hypothesis, not an increment — replace, don't
+ * append, since progressive Whisper hypotheses can revise earlier words.
+ */
+export function setLiveSegmentSourceText(
   recordingId: string,
   segmentId: string,
   text: string,
 ): void {
   const existing = state.recordings[recordingId]?.liveSegments[segmentId];
-  // segment.completed already carried the full text; late deltas are stale.
+  // segment.completed already carried the final text; late deltas are stale.
   if (existing?.completed) return;
-  upsertLiveSegment(recordingId, {
-    segmentId,
-    sourceText: (existing?.sourceText ?? "") + text,
-  });
-}
-
-/** Append delta text to a segment's translation for one language. */
-export function appendLiveSegmentTranslation(
-  recordingId: string,
-  segmentId: string,
-  language: string,
-  text: string,
-): void {
-  const existing = state.recordings[recordingId]?.liveSegments[segmentId];
-  // segment.completed already carried the full translations; late deltas
-  // are stale.
-  if (existing?.completed) return;
-  upsertLiveSegment(recordingId, {
-    segmentId,
-    translations: { [language]: (existing?.translations[language] ?? "") + text },
-  });
+  upsertLiveSegment(recordingId, { segmentId, sourceText: text });
 }
 
 /**
