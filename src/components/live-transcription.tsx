@@ -31,6 +31,11 @@ export default function LiveTranscriptionView({
   const { status, error, elapsedSeconds, start, stop } = useLiveSession(
     recording.id,
     recording.speakers,
+    // Recordings created before target-language selection was added retain the
+    // original behavior: translate into every configured speaker language.
+    recording.targetLanguages ?? [
+      ...new Set(recording.speakers.flatMap((speaker) => speaker.languages)),
+    ],
   );
 
   // A session started from "Start Recording" begins streaming right away.

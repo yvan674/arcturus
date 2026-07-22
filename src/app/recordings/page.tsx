@@ -50,6 +50,7 @@ export default function RecordingsStartPage() {
     setIsStarting(true);
     const recording = createRecording({
       speakers: setup.speakers,
+      targetLanguages: setup.targetLanguages,
       startedVia: "upload",
       audioBlob: selectedFile,
     });
@@ -63,6 +64,7 @@ export default function RecordingsStartPage() {
     setIsStarting(true);
     const recording = createRecording({
       speakers: setup.speakers,
+      targetLanguages: setup.targetLanguages,
       startedVia: "record",
     });
     router.push(`/recordings/${recording.id}`);

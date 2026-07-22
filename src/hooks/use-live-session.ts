@@ -32,7 +32,11 @@ const RECORDER_MIME_CANDIDATES = [
  * records the same chunks locally for /v1/refine, and writes every server
  * event into the recordings store (upsert by segment_id).
  */
-export function useLiveSession(recordingId: string, speakers: SpeakerConfig[]) {
+export function useLiveSession(
+  recordingId: string,
+  speakers: SpeakerConfig[],
+  targetLanguages: string[],
+) {
   const [status, setStatus] = useState<LiveSessionStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -188,18 +192,18 @@ export function useLiveSession(recordingId: string, speakers: SpeakerConfig[]) {
     wsRef.current = ws;
 
     ws.onopen = () => {
-      // Every language any speaker may use; also biases Whisper's
-      // auto-detection via possible_languages.
-      const languages = [...new Set(speakers.flatMap((s) => s.languages))];
+      // Speaker languages bias Whisper's auto-detection; translation output is
+      // controlled independently by the targets selected during setup.
+      const possibleLanguages = [
+        ...new Set(speakers.flatMap((s) => s.languages)),
+      ];
       const sessionStart: SessionStartMessage = {
         type: "session.start",
         // The diarizer only needs an upper bound on distinct voices; mapping
         // its anonymous labels to people happens on our side (if at all).
         max_speakers: Math.max(speakers.length, 1),
-        // Translate into every language spoken in the room so all parties
-        // can follow live.
-        target_languages: languages,
-        possible_languages: languages,
+        target_languages: targetLanguages,
+        possible_languages: possibleLanguages,
         audio: { format: "webm-opus" },
       };
       ws.send(JSON.stringify(sessionStart));
@@ -229,7 +233,13 @@ export function useLiveSession(recordingId: string, speakers: SpeakerConfig[]) {
         failSession("Could not reach the transcription service.");
       }
     };
-  }, [failSession, handleServerEvent, setStatusBoth, speakers]);
+  }, [
+    failSession,
+    handleServerEvent,
+    setStatusBoth,
+    speakers,
+    targetLanguages,
+  ]);
 
   /** Ends the session; the server flushes remaining events, then closes. */
   const stop = useCallback(() => {

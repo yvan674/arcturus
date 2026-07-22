@@ -57,10 +57,12 @@ const MAX_LANGUAGES_PER_SPEAKER = 3;
 
 export interface SessionSetup {
   speakers: SpeakerConfig[];
+  targetLanguages: string[];
 }
 
 export function defaultSessionSetup(): SessionSetup {
   return {
+    targetLanguages: ["de", "en"],
     speakers: [
       { id: "speaker-1", role: "doctor", languages: ["de"] },
       { id: "speaker-2", role: "patient", languages: ["en"] },
@@ -85,9 +87,8 @@ function NativeSelect({
 
 /**
  * Controlled form for the session configuration shared by both backends:
- * who is in the room and which languages they speak. Live captions are
- * translated into every language listed here, so no separate target
- * language is needed.
+ * who is in the room, which languages they speak, and the languages used for
+ * translated live captions.
  */
 export function SpeakerConfigForm({
   value,
@@ -101,6 +102,17 @@ export function SpeakerConfigForm({
       i === index ? { ...speaker, ...patch } : speaker,
     );
     onChange({ ...value, speakers });
+  };
+
+  const addTargetLanguage = () => {
+    const next = LANGUAGES.find(
+      (language) => !value.targetLanguages.includes(language.code),
+    );
+    if (!next) return;
+    onChange({
+      ...value,
+      targetLanguages: [...value.targetLanguages, next.code],
+    });
   };
 
   const addSpeaker = () => {
@@ -144,12 +156,74 @@ export function SpeakerConfigForm({
   return (
     <FieldGroup className="gap-6">
       <FieldSet>
+        <FieldLegend>Target languages</FieldLegend>
+        <FieldDescription>
+          Live captions are translated into every selected language. Each
+          language runs a separate translation session, so choose only what
+          you need.
+        </FieldDescription>
+        <div className="flex flex-wrap items-center gap-2">
+          {value.targetLanguages.map((targetLanguage, index) => (
+            <div key={targetLanguage} className="flex items-center gap-1">
+              <NativeSelect
+                aria-label={`Target language ${index + 1}`}
+                className="w-36"
+                value={targetLanguage}
+                onChange={(event) =>
+                  onChange({
+                    ...value,
+                    targetLanguages: value.targetLanguages.map((language, i) =>
+                      i === index ? event.target.value : language,
+                    ),
+                  })
+                }
+              >
+                {LANGUAGES.filter(
+                  (language) =>
+                    language.code === targetLanguage ||
+                    !value.targetLanguages.includes(language.code),
+                ).map((language) => (
+                  <option key={language.code} value={language.code}>
+                    {language.label}
+                  </option>
+                ))}
+              </NativeSelect>
+              {value.targetLanguages.length > 1 && (
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className="text-muted-foreground"
+                  aria-label={`Remove ${languageLabel(targetLanguage)} as a target language`}
+                  onClick={() =>
+                    onChange({
+                      ...value,
+                      targetLanguages: value.targetLanguages.filter(
+                        (_, targetIndex) => targetIndex !== index,
+                      ),
+                    })
+                  }
+                >
+                  <X />
+                </Button>
+              )}
+            </div>
+          ))}
+          {value.targetLanguages.length < LANGUAGES.length && (
+            <Button variant="outline" size="xs" onClick={addTargetLanguage}>
+              <Plus data-icon="inline-start" />
+              Target language
+            </Button>
+          )}
+        </div>
+      </FieldSet>
+
+      <FieldSet>
         <FieldLegend>Speakers</FieldLegend>
         <FieldDescription>
-          Who is in the room and which languages they may use. During a live
-          session everything is translated into each of these languages, so
-          every party can follow along. The interpreter repeats what the
-          doctor and patient say in the other party&apos;s language.
+          Who is in the room and which languages they may use. These languages
+          help the transcription service recognize speech accurately. The
+          interpreter repeats what the doctor and patient say in the other
+          party&apos;s language.
         </FieldDescription>
         <div className="flex flex-col gap-3">
           {value.speakers.map((speaker, index) => (

@@ -240,6 +240,9 @@ CRUSH.md
 QWEN.md
 CLAUDE.md
 
+.claude/
+.claude/*
+
 # OpenAI Codex
 AGENTS.md
 # .codex/

@@ -50,6 +50,8 @@ export interface RecordingSession {
   title: string;
   createdAt: number;
   speakers: SpeakerConfig[];
+  /** ISO 639-1 codes used for translated live captions. */
+  targetLanguages: string[];
   status: RecordingStatus;
   startedVia: "record" | "upload";
   /** Keyed by segment_id — segment.completed upserts, speaker.update patches. */
@@ -252,6 +254,7 @@ if (typeof window !== "undefined") {
 
 export function createRecording(input: {
   speakers: SpeakerConfig[];
+  targetLanguages: string[];
   startedVia: "record" | "upload";
   audioBlob?: Blob;
 }): RecordingSession {
@@ -266,6 +269,7 @@ export function createRecording(input: {
     })}`,
     createdAt: now,
     speakers: input.speakers,
+    targetLanguages: input.targetLanguages,
     status: "new",
     startedVia: input.startedVia,
     liveSegments: {},

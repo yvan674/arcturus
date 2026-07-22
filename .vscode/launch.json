@@ -12,6 +12,17 @@
         "action": "debugWithChrome"
       }
     },
+     {
+      "name": "Remote",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "npm run dev:remote",
+      "serverReadyAction": {
+        "pattern": "- Local:.+(https?://.+)",
+        "uriFormat": "%s",
+        "action": "debugWithChrome"
+      }
+    },
     {
       "name": "Run tests",
       "type": "node-terminal",
