@@ -93,6 +93,32 @@ export interface RefinedTurn {
 }
 
 /** Response of POST /v1/refine. */
+export interface RefineJobSubmission {
+  job_id: string;
+}
+
+export type RefineJobPhase =
+  | "decoding"
+  | "diarizing"
+  | "transcribing"
+  | "reviewing";
+
+/** Response of GET /v1/refine/jobs/{job_id}. */
+export interface RefineJob {
+  job_id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  phase: RefineJobPhase | null;
+  message: string;
+  percent: number;
+  completed_units: number | null;
+  total_units: number | null;
+  filename: string;
+  audio_duration: number | null;
+  result_id: string | null;
+  error: string | null;
+}
+
+/** Response of GET /v1/refine/transcripts/{result_id}. */
 export interface RefineResult {
   turns: RefinedTurn[];
   /** Review remarks a human should see; surface next to the transcript. */

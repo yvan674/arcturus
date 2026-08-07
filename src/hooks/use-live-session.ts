@@ -71,6 +71,7 @@ export function useLiveSession(
     updateRecording(recordingId, {
       status: "live-ended",
       audioBlob: blob.size > 0 ? blob : null,
+      audioFileName: blob.size > 0 ? "session.webm" : null,
     });
   }, [recordingId]);
 

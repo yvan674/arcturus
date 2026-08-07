@@ -27,6 +27,7 @@ const STATUS_HINTS: Record<RecordingStatus, string> = {
   new: "Not started",
   live: "Live",
   "live-ended": "Recorded",
+  uploading: "Uploading…",
   refining: "Processing…",
   refined: "Reviewed",
   "refine-error": "Failed",

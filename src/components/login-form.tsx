@@ -69,7 +69,7 @@ export function LoginForm({
                   id="email"
                   name="email"
                   type="email"
-                  placeholder="yvan.satyawan@alpineai.com"
+                  placeholder="yvan.satyawan@alpineai.ch"
                   autoComplete="email"
                   required
                 />

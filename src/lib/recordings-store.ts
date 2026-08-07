@@ -2,8 +2,12 @@
 
 import { useSyncExternalStore } from "react";
 
-import { refineRecording } from "./backend/client";
-import type { RefineResult, SpeakerConfig } from "./backend/types";
+import { pollRefinement, submitRefinement } from "./backend/client";
+import type {
+  RefineJobPhase,
+  RefineResult,
+  SpeakerConfig,
+} from "./backend/types";
 
 /**
  * The backend is stateless, so the frontend is the source of truth for the
@@ -38,7 +42,9 @@ export type RecordingStatus =
   | "live"
   /** Live session over; audio kept locally, not refined yet. */
   | "live-ended"
-  /** POST /v1/refine in flight. */
+  /** Audio is being sent to POST /v1/refine. */
+  | "uploading"
+  /** The submitted refinement job is queued or running. */
   | "refining"
   /** Refined transcript available. */
   | "refined"
@@ -58,6 +64,11 @@ export interface RecordingSession {
   liveSegments: Record<string, LiveSegment>;
   /** The recording itself; required for /v1/refine. */
   audioBlob: Blob | null;
+  audioFileName: string | null;
+  refineJobId: string | null;
+  refinePhase: RefineJobPhase | null;
+  refineMessage: string | null;
+  refineProgress: number | null;
   refined: RefineResult | null;
   refineError: string | null;
 }
@@ -257,6 +268,7 @@ export function createRecording(input: {
   targetLanguages: string[];
   startedVia: "record" | "upload";
   audioBlob?: Blob;
+  audioFileName?: string;
 }): RecordingSession {
   const now = Date.now();
   const recording: RecordingSession = {
@@ -274,6 +286,11 @@ export function createRecording(input: {
     startedVia: input.startedVia,
     liveSegments: {},
     audioBlob: input.audioBlob ?? null,
+    audioFileName: input.audioFileName ?? null,
+    refineJobId: null,
+    refinePhase: null,
+    refineMessage: null,
+    refineProgress: null,
     refined: null,
     refineError: null,
   };
@@ -365,16 +382,54 @@ export function setLiveSegmentSourceText(
  */
 export async function startRefinement(recordingId: string): Promise<void> {
   const recording = state.recordings[recordingId];
-  if (!recording?.audioBlob || recording.status === "refining") return;
+  if (
+    !recording?.audioBlob ||
+    recording.status === "uploading" ||
+    recording.status === "refining"
+  ) {
+    return;
+  }
 
-  updateRecording(recordingId, { status: "refining", refineError: null });
+  updateRecording(recordingId, {
+    status: "uploading",
+    refineError: null,
+    refineJobId: null,
+    refinePhase: null,
+    refineMessage: "Uploading recording",
+    refineProgress: 0,
+  });
 
   try {
-    const refined = await refineRecording(
+    const submission = await submitRefinement(
       recording.audioBlob,
       recording.speakers,
+      recording.audioFileName ?? "session.webm",
+      {
+        onProgress: (percent) => {
+          updateRecording(recordingId, { refineProgress: percent });
+        },
+      },
     );
-    updateRecording(recordingId, { status: "refined", refined });
+    updateRecording(recordingId, {
+      status: "refining",
+      refineJobId: submission.job_id,
+      refineMessage: "Waiting to process recording",
+      refineProgress: 0,
+    });
+
+    const refined = await pollRefinement(submission.job_id, (job) => {
+      updateRecording(recordingId, {
+        refinePhase: job.phase,
+        refineMessage: job.message,
+        refineProgress: job.percent,
+      });
+    });
+    updateRecording(recordingId, {
+      status: "refined",
+      refineMessage: "Processing complete",
+      refineProgress: 100,
+      refined,
+    });
   } catch (error) {
     updateRecording(recordingId, {
       status: "refine-error",

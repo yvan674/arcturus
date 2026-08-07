@@ -19,6 +19,7 @@ type TabValue = "live" | "processed";
 function defaultTab(recording: RecordingSession): TabValue {
   if (recording.startedVia === "upload") return "processed";
   if (
+    recording.status === "uploading" ||
     recording.status === "refining" ||
     recording.status === "refined" ||
     recording.status === "refine-error"

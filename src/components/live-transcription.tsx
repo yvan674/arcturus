@@ -7,7 +7,7 @@ import { formatAudioTime } from "@/components/speaker-meta";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { useLiveSession } from "@/hooks/use-live-session";
-import { languageLabel } from "@/components/speaker-config-form";
+import { languageLabel } from "@/lib/languages";
 import {
   startRefinement,
   type LiveSegment,

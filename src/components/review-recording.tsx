@@ -1,9 +1,23 @@
 "use client";
 
-import { TriangleAlert } from "lucide-react";
+import {
+  CheckIcon,
+  FileWarningIcon,
+  MicVocal as MicAudioLines,
+  RefreshCwIcon,
+  TriangleAlert,
+} from "lucide-react";
 
-import { languageLabel } from "@/components/speaker-config-form";
 import { formatAudioTime, roleMeta } from "@/components/speaker-meta";
+import {
+  Attachment,
+  AttachmentAction,
+  AttachmentActions,
+  AttachmentContent,
+  AttachmentDescription,
+  AttachmentMedia,
+  AttachmentTitle,
+} from "@/components/ui/attachment";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -14,6 +28,7 @@ import {
 } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import type { RefinedTurn } from "@/lib/backend/types";
+import { languageLabel } from "@/lib/languages";
 import {
   startRefinement,
   type RecordingSession,
@@ -29,29 +44,15 @@ export default function ReviewRecordingView({
 }: {
   recording: RecordingSession;
 }) {
-  if (recording.status === "refining") {
+  if (
+    recording.status === "uploading" ||
+    recording.status === "refining" ||
+    recording.status === "refine-error"
+  ) {
     return (
-      <CenteredCard
-        title="Refining recording…"
-        description="Transcribing, attributing speakers and translating. This can take up to a minute for long consultations."
-      >
-        <Spinner className="size-6" />
-      </CenteredCard>
-    );
-  }
-
-  if (recording.status === "refine-error") {
-    return (
-      <CenteredCard
-        title="Refinement failed"
-        description={recording.refineError ?? "Something went wrong."}
-      >
-        {recording.audioBlob && (
-          <Button onClick={() => void startRefinement(recording.id)}>
-            Try again
-          </Button>
-        )}
-      </CenteredCard>
+      <div className="mx-auto mt-8 w-full max-w-md">
+        <RefinementAttachment recording={recording} />
+      </div>
     );
   }
 
@@ -78,6 +79,7 @@ export default function ReviewRecordingView({
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 pb-24">
+      <RefinementAttachment recording={recording} />
       <p className="text-xs text-muted-foreground">
         Detected language: {detected_language} · Duration:{" "}
         {formatAudioTime(duration)} · {turns.length} turns
@@ -102,6 +104,98 @@ export default function ReviewRecordingView({
       ))}
     </div>
   );
+}
+
+function RefinementAttachment({
+  recording,
+}: {
+  recording: RecordingSession;
+}) {
+  const filename = recording.audioFileName ?? "session.webm";
+  const percent = Math.round(recording.refineProgress ?? 0);
+
+  if (recording.status === "uploading") {
+    return (
+      <Attachment state="uploading" className="w-full">
+        <AttachmentMedia>
+          <Spinner />
+        </AttachmentMedia>
+        <AttachmentContent>
+          <AttachmentTitle>{filename}</AttachmentTitle>
+          <AttachmentDescription>Uploading · {percent}%</AttachmentDescription>
+        </AttachmentContent>
+      </Attachment>
+    );
+  }
+
+  if (recording.status === "refining") {
+    return (
+      <Attachment state="processing" className="w-full">
+        <AttachmentMedia>
+          <MicAudioLines />
+        </AttachmentMedia>
+        <AttachmentContent>
+          <AttachmentTitle>{filename}</AttachmentTitle>
+          <AttachmentDescription>
+            {recording.refineMessage ?? "Processing recording"} · {percent}%
+          </AttachmentDescription>
+        </AttachmentContent>
+      </Attachment>
+    );
+  }
+
+  if (recording.status === "refine-error") {
+    return (
+      <Attachment state="error" className="w-full">
+        <AttachmentMedia>
+          <FileWarningIcon />
+        </AttachmentMedia>
+        <AttachmentContent>
+          <AttachmentTitle>{filename}</AttachmentTitle>
+          <AttachmentDescription>
+            {recording.refineError ?? "Processing failed. Try again."}
+          </AttachmentDescription>
+        </AttachmentContent>
+        {recording.audioBlob && (
+          <AttachmentActions>
+            <AttachmentAction
+              aria-label={`Retry processing ${filename}`}
+              onClick={() => void startRefinement(recording.id)}
+            >
+              <RefreshCwIcon />
+            </AttachmentAction>
+          </AttachmentActions>
+        )}
+      </Attachment>
+    );
+  }
+
+  if (recording.status === "refined") {
+    return (
+      <Attachment state="done" className="w-full">
+        <AttachmentMedia>
+          <CheckIcon />
+        </AttachmentMedia>
+        <AttachmentContent>
+          <AttachmentTitle>{filename}</AttachmentTitle>
+          <AttachmentDescription>
+            Processed
+            {recording.audioBlob
+              ? ` · ${formatFileSize(recording.audioBlob.size)}`
+              : ""}
+          </AttachmentDescription>
+        </AttachmentContent>
+      </Attachment>
+    );
+  }
+
+  return null;
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function TurnCard({ turn }: { turn: RefinedTurn }) {
