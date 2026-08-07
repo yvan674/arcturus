@@ -103,13 +103,31 @@ export type RefineJobPhase =
   | "transcribing"
   | "reviewing";
 
+/** The diarizer's internal steps; only reported while `phase` is diarizing. */
+export type RefineJobStep =
+  | "segmentation"
+  | "speaker_counting"
+  | "embeddings"
+  | "discrete_diarization";
+
 /** Response of GET /v1/refine/jobs/{job_id}. */
 export interface RefineJob {
   job_id: string;
   status: "queued" | "running" | "completed" | "failed";
   phase: RefineJobPhase | null;
+  /** Null outside the diarizing phase. */
+  step: RefineJobStep | null;
   message: string;
+  /**
+   * Rough overall estimate from fixed phase weights, never going backwards —
+   * good for a progress bar, not for an ETA.
+   */
   percent: number;
+  /**
+   * Progress inside the current phase: diarizer chunks while diarizing,
+   * finished vs. total speaker turns while transcribing. Null in phases that
+   * are a single blocking call.
+   */
   completed_units: number | null;
   total_units: number | null;
   filename: string;

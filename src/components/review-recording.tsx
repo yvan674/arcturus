@@ -1,11 +1,14 @@
 "use client";
 
+import { Fragment } from "react";
 import {
   CheckIcon,
+  ChevronRightIcon,
   FileWarningIcon,
   MicVocal as MicAudioLines,
   RefreshCwIcon,
   TriangleAlert,
+  UploadIcon,
 } from "lucide-react";
 
 import { formatAudioTime, roleMeta } from "@/components/speaker-meta";
@@ -26,13 +29,18 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Spinner } from "@/components/ui/spinner";
-import type { RefinedTurn } from "@/lib/backend/types";
-import { languageLabel } from "@/lib/languages";
 import {
-  startRefinement,
-  type RecordingSession,
-} from "@/lib/recordings-store";
+  Progress,
+  ProgressLabel,
+  ProgressValue,
+} from "@/components/ui/progress";
+import type {
+  RefinedTurn,
+  RefineJobPhase,
+  RefineJobStep,
+} from "@/lib/backend/types";
+import { languageLabel } from "@/lib/languages";
+import { startRefinement, type RecordingSession } from "@/lib/recordings-store";
 import { cn } from "@/lib/utils";
 
 /**
@@ -106,11 +114,31 @@ export default function ReviewRecordingView({
   );
 }
 
-function RefinementAttachment({
-  recording,
-}: {
-  recording: RecordingSession;
-}) {
+/**
+ * The refinement pipeline as the user sees it. `percent` is weighted across
+ * these same four phases by the backend, so the bar and the phase trail always
+ * agree.
+ */
+const REFINE_PHASES: {
+  phase: RefineJobPhase;
+  short: string;
+  label: string;
+}[] = [
+  { phase: "decoding", short: "Decode", label: "Decoding audio" },
+  { phase: "diarizing", short: "Speakers", label: "Separating speakers" },
+  { phase: "transcribing", short: "Transcribe", label: "Transcribing speech" },
+  { phase: "reviewing", short: "Review", label: "Reviewing transcript" },
+];
+
+/** The diarizer's internal steps, reported only while diarizing. */
+const DIARIZATION_STEPS: Record<RefineJobStep, string> = {
+  segmentation: "Finding speech",
+  speaker_counting: "Counting speakers",
+  embeddings: "Comparing voices",
+  discrete_diarization: "Assigning speakers",
+};
+
+function RefinementAttachment({ recording }: { recording: RecordingSession }) {
   const filename = recording.audioFileName ?? "session.webm";
   const percent = Math.round(recording.refineProgress ?? 0);
 
@@ -118,17 +146,28 @@ function RefinementAttachment({
     return (
       <Attachment state="uploading" className="w-full">
         <AttachmentMedia>
-          <Spinner />
+          <UploadIcon />
         </AttachmentMedia>
         <AttachmentContent>
           <AttachmentTitle>{filename}</AttachmentTitle>
-          <AttachmentDescription>Uploading · {percent}%</AttachmentDescription>
+          <RefinementProgress label="Uploading recording" percent={percent} />
         </AttachmentContent>
       </Attachment>
     );
   }
 
   if (recording.status === "refining") {
+    const phaseIndex = REFINE_PHASES.findIndex(
+      (entry) => entry.phase === recording.refinePhase,
+    );
+    // `step` is only set while diarizing, where it is the more specific label.
+    const label = recording.refineStep
+      ? DIARIZATION_STEPS[recording.refineStep]
+      : (REFINE_PHASES[phaseIndex]?.label ?? "Waiting to process");
+    const completed = recording.refineCompletedUnits;
+    const total = recording.refineTotalUnits;
+    const units = total ? `${completed ?? 0}/${total}` : null;
+
     return (
       <Attachment state="processing" className="w-full">
         <AttachmentMedia>
@@ -136,9 +175,11 @@ function RefinementAttachment({
         </AttachmentMedia>
         <AttachmentContent>
           <AttachmentTitle>{filename}</AttachmentTitle>
-          <AttachmentDescription>
-            {recording.refineMessage ?? "Processing recording"} · {percent}%
-          </AttachmentDescription>
+          <RefinementProgress
+            label={units ? `${label} · ${units}` : label}
+            percent={percent}
+          />
+          <PhaseTrail current={phaseIndex} />
         </AttachmentContent>
       </Attachment>
     );
@@ -190,6 +231,53 @@ function RefinementAttachment({
   }
 
   return null;
+}
+
+/** Current step and overall percentage, sitting inside the attachment. */
+function RefinementProgress({
+  label,
+  percent,
+}: {
+  label: string;
+  percent: number;
+}) {
+  return (
+    <Progress
+      value={percent}
+      className="mt-1.5 gap-x-2 gap-y-1 *:data-[slot=progress-track]:h-1.5"
+    >
+      <ProgressLabel className="min-w-0 truncate text-xs font-normal text-muted-foreground">
+        {label}
+      </ProgressLabel>
+      <ProgressValue className="text-xs">
+        {(_, value) => `${Math.round(value ?? 0)}%`}
+      </ProgressValue>
+    </Progress>
+  );
+}
+
+/** Decode → Speakers → Transcribe → Review, with the current phase lit up. */
+function PhaseTrail({ current }: { current: number }) {
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-1 gap-y-0.5 text-[10px] font-medium tracking-wide uppercase">
+      {REFINE_PHASES.map((entry, index) => (
+        <Fragment key={entry.phase}>
+          {index > 0 && (
+            <ChevronRightIcon className="size-3 text-muted-foreground/40" />
+          )}
+          <span
+            className={cn(
+              index < current && "text-muted-foreground",
+              index === current && "text-foreground",
+              index > current && "text-muted-foreground/40",
+            )}
+          >
+            {entry.short}
+          </span>
+        </Fragment>
+      ))}
+    </div>
+  );
 }
 
 function formatFileSize(bytes: number): string {

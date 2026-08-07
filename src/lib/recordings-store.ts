@@ -5,6 +5,7 @@ import { useSyncExternalStore } from "react";
 import { pollRefinement, submitRefinement } from "./backend/client";
 import type {
   RefineJobPhase,
+  RefineJobStep,
   RefineResult,
   SpeakerConfig,
 } from "./backend/types";
@@ -60,6 +61,8 @@ export interface RecordingSession {
   targetLanguages: string[];
   status: RecordingStatus;
   startedVia: "record" | "upload";
+  /** Dev-only: stream res/test-45.mp3 instead of capturing a microphone. */
+  mockAudio?: boolean;
   /** Keyed by segment_id — segment.completed upserts, speaker.update patches. */
   liveSegments: Record<string, LiveSegment>;
   /** The recording itself; required for /v1/refine. */
@@ -67,8 +70,13 @@ export interface RecordingSession {
   audioFileName: string | null;
   refineJobId: string | null;
   refinePhase: RefineJobPhase | null;
+  /** The diarizer's internal step; only set while the phase is diarizing. */
+  refineStep: RefineJobStep | null;
   refineMessage: string | null;
   refineProgress: number | null;
+  /** Progress inside the current phase; null in single-call phases. */
+  refineCompletedUnits: number | null;
+  refineTotalUnits: number | null;
   refined: RefineResult | null;
   refineError: string | null;
 }
@@ -269,6 +277,7 @@ export function createRecording(input: {
   startedVia: "record" | "upload";
   audioBlob?: Blob;
   audioFileName?: string;
+  mockAudio?: boolean;
 }): RecordingSession {
   const now = Date.now();
   const recording: RecordingSession = {
@@ -284,13 +293,17 @@ export function createRecording(input: {
     targetLanguages: input.targetLanguages,
     status: "new",
     startedVia: input.startedVia,
+    mockAudio: input.mockAudio ?? false,
     liveSegments: {},
     audioBlob: input.audioBlob ?? null,
     audioFileName: input.audioFileName ?? null,
     refineJobId: null,
     refinePhase: null,
+    refineStep: null,
     refineMessage: null,
     refineProgress: null,
+    refineCompletedUnits: null,
+    refineTotalUnits: null,
     refined: null,
     refineError: null,
   };
@@ -395,8 +408,11 @@ export async function startRefinement(recordingId: string): Promise<void> {
     refineError: null,
     refineJobId: null,
     refinePhase: null,
+    refineStep: null,
     refineMessage: "Uploading recording",
     refineProgress: 0,
+    refineCompletedUnits: null,
+    refineTotalUnits: null,
   });
 
   try {
@@ -420,14 +436,21 @@ export async function startRefinement(recordingId: string): Promise<void> {
     const refined = await pollRefinement(submission.job_id, (job) => {
       updateRecording(recordingId, {
         refinePhase: job.phase,
+        refineStep: job.step,
         refineMessage: job.message,
         refineProgress: job.percent,
+        refineCompletedUnits: job.completed_units,
+        refineTotalUnits: job.total_units,
       });
     });
     updateRecording(recordingId, {
       status: "refined",
+      refinePhase: null,
+      refineStep: null,
       refineMessage: "Processing complete",
       refineProgress: 100,
+      refineCompletedUnits: null,
+      refineTotalUnits: null,
       refined,
     });
   } catch (error) {

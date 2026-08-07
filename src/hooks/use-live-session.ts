@@ -9,6 +9,14 @@ import type {
   SpeakerConfig,
 } from "@/lib/backend/types";
 import {
+  concatSamples,
+  encodeWav,
+  loadMockAudioSamples,
+  MOCK_AUDIO_CHUNK_MS,
+  MOCK_AUDIO_SAMPLES_PER_CHUNK,
+  type PcmSamples,
+} from "@/lib/mock-audio";
+import {
   setLiveSegmentSourceText,
   updateRecording,
   upsertLiveSegment,
@@ -31,11 +39,15 @@ const RECORDER_MIME_CANDIDATES = [
  * Drives one live transcription session: streams mic audio over WS /v1/live,
  * records the same chunks locally for /v1/refine, and writes every server
  * event into the recordings store (upsert by segment_id).
+ *
+ * With `mockAudio`, the microphone is replaced by res/test-45.mp3 played back
+ * in real time as pcm16-24k frames — a debugging aid, dev builds only.
  */
 export function useLiveSession(
   recordingId: string,
   speakers: SpeakerConfig[],
   targetLanguages: string[],
+  mockAudio = false,
 ) {
   const [status, setStatus] = useState<LiveSessionStatus>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -47,10 +59,21 @@ export function useLiveSession(
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const statusRef = useRef<LiveSessionStatus>("idle");
+  /** Mock session: the decoded file, and the part of it actually streamed. */
+  const mockSamplesRef = useRef<PcmSamples | null>(null);
+  const mockSentRef = useRef<PcmSamples[]>([]);
+  const mockTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const setStatusBoth = useCallback((next: LiveSessionStatus) => {
     statusRef.current = next;
     setStatus(next);
+  }, []);
+
+  const stopMockFeed = useCallback(() => {
+    if (mockTimerRef.current) {
+      clearInterval(mockTimerRef.current);
+      mockTimerRef.current = null;
+    }
   }, []);
 
   const cleanupMedia = useCallback(() => {
@@ -59,21 +82,32 @@ export function useLiveSession(
     recorderRef.current = null;
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
+    stopMockFeed();
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
-  }, []);
+  }, [stopMockFeed]);
 
   const finalizeRecording = useCallback(() => {
-    // Keep the full recording locally: it is the input for /v1/refine.
-    const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+    // Keep the full recording locally: it is the input for /v1/refine. For a
+    // mock session that is exactly the audio that was streamed, so stopping
+    // early refines the same audio the live transcript came from.
+    const sentSamples = mockAudio ? concatSamples(mockSentRef.current) : null;
+    const blob =
+      sentSamples !== null
+        ? sentSamples.length > 0
+          ? encodeWav(sentSamples)
+          : new Blob([])
+        : new Blob(chunksRef.current, { type: "audio/webm" });
+    const filename = mockAudio ? "mock-session.wav" : "session.webm";
+
     updateRecording(recordingId, {
       status: "live-ended",
       audioBlob: blob.size > 0 ? blob : null,
-      audioFileName: blob.size > 0 ? "session.webm" : null,
+      audioFileName: blob.size > 0 ? filename : null,
     });
-  }, [recordingId]);
+  }, [mockAudio, recordingId]);
 
   const failSession = useCallback(
     (message: string) => {
@@ -87,13 +121,67 @@ export function useLiveSession(
     [cleanupMedia, finalizeRecording, setStatusBoth],
   );
 
+  /** Ends the session; the server flushes remaining events, then closes. */
+  const stop = useCallback(() => {
+    if (statusRef.current !== "live") return;
+    setStatusBoth("stopping");
+
+    stopMockFeed();
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      // Flush the final chunk before announcing the end of the session.
+      recorder.onstop = () => {
+        wsRef.current?.send(JSON.stringify({ type: "session.end" }));
+      };
+      recorder.stop();
+    } else {
+      wsRef.current?.send(JSON.stringify({ type: "session.end" }));
+    }
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  }, [setStatusBoth, stopMockFeed]);
+
+  /** Paces the decoded file out in 100 ms frames, as a microphone would. */
+  const startMockFeed = useCallback(() => {
+    const samples = mockSamplesRef.current;
+    if (!samples) return false;
+
+    let offset = 0;
+    mockTimerRef.current = setInterval(() => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+      const end = Math.min(offset + MOCK_AUDIO_SAMPLES_PER_CHUNK, samples.length);
+      const chunk = samples.subarray(offset, end);
+      offset = end;
+      if (chunk.length > 0) {
+        mockSentRef.current.push(chunk);
+        // Int16Array is little-endian on every platform we target, which is
+        // what pcm16-24k expects.
+        ws.send(chunk);
+      }
+      // The file is finite; when it runs out the session ends by itself, the
+      // same way pressing Stop would.
+      if (offset >= samples.length) stop();
+    }, MOCK_AUDIO_CHUNK_MS);
+    return true;
+  }, [stop]);
+
   const handleServerEvent = useCallback(
     (event: LiveServerEvent) => {
       switch (event.type) {
         case "session.ready": {
           const recorder = recorderRef.current;
-          if (recorder && recorder.state === "inactive") {
+          let started = false;
+          if (mockAudio) {
+            started = startMockFeed();
+          } else if (recorder && recorder.state === "inactive") {
             recorder.start(100); // 100 ms chunks
+            started = true;
+          }
+          if (started) {
             setStatusBoth("live");
             updateRecording(recordingId, { status: "live" });
             timerRef.current = setInterval(
@@ -144,7 +232,15 @@ export function useLiveSession(
         }
       }
     },
-    [cleanupMedia, failSession, finalizeRecording, recordingId, setStatusBoth],
+    [
+      cleanupMedia,
+      failSession,
+      finalizeRecording,
+      mockAudio,
+      recordingId,
+      setStatusBoth,
+      startMockFeed,
+    ],
   );
 
   const start = useCallback(async () => {
@@ -154,40 +250,60 @@ export function useLiveSession(
     setError(null);
     setElapsedSeconds(0);
     chunksRef.current = [];
+    mockSamplesRef.current = null;
+    mockSentRef.current = [];
     setStatusBoth("connecting");
 
-    const mimeType = RECORDER_MIME_CANDIDATES.find((candidate) =>
-      typeof MediaRecorder !== "undefined"
-        ? MediaRecorder.isTypeSupported(candidate)
-        : false,
-    );
-    if (!mimeType) {
-      setStatusBoth("error");
-      setError(
-        "This browser cannot record webm/opus audio. Please use Chrome, Edge or Firefox.",
+    let audioFormat: SessionStartMessage["audio"]["format"];
+
+    if (mockAudio) {
+      try {
+        mockSamplesRef.current = await loadMockAudioSamples();
+      } catch (loadError) {
+        setStatusBoth("error");
+        setError(
+          loadError instanceof Error
+            ? loadError.message
+            : "Could not load the mock recording.",
+        );
+        return;
+      }
+      audioFormat = "pcm16-24k";
+    } else {
+      const mimeType = RECORDER_MIME_CANDIDATES.find((candidate) =>
+        typeof MediaRecorder !== "undefined"
+          ? MediaRecorder.isTypeSupported(candidate)
+          : false,
       );
-      return;
-    }
+      if (!mimeType) {
+        setStatusBoth("error");
+        setError(
+          "This browser cannot record webm/opus audio. Please use Chrome, Edge or Firefox.",
+        );
+        return;
+      }
 
-    let stream: MediaStream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch {
-      setStatusBoth("error");
-      setError("Microphone access was denied.");
-      return;
-    }
-    streamRef.current = stream;
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch {
+        setStatusBoth("error");
+        setError("Microphone access was denied.");
+        return;
+      }
+      streamRef.current = stream;
 
-    const recorder = new MediaRecorder(stream, { mimeType });
-    recorderRef.current = recorder;
-    recorder.ondataavailable = (e) => {
-      if (e.data.size === 0) return;
-      chunksRef.current.push(e.data); // kept for /v1/refine later
-      const ws = wsRef.current;
-      // Stream continuously, including silence — no voice gating.
-      if (ws && ws.readyState === WebSocket.OPEN) ws.send(e.data);
-    };
+      const recorder = new MediaRecorder(stream, { mimeType });
+      recorderRef.current = recorder;
+      recorder.ondataavailable = (e) => {
+        if (e.data.size === 0) return;
+        chunksRef.current.push(e.data); // kept for /v1/refine later
+        const ws = wsRef.current;
+        // Stream continuously, including silence — no voice gating.
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(e.data);
+      };
+      audioFormat = "webm-opus";
+    }
 
     const ws = new WebSocket(liveSessionUrl());
     wsRef.current = ws;
@@ -205,7 +321,7 @@ export function useLiveSession(
         max_speakers: Math.max(speakers.length, 1),
         target_languages: targetLanguages,
         possible_languages: possibleLanguages,
-        audio: { format: "webm-opus" },
+        audio: { format: audioFormat },
       };
       ws.send(JSON.stringify(sessionStart));
     };
@@ -237,31 +353,11 @@ export function useLiveSession(
   }, [
     failSession,
     handleServerEvent,
+    mockAudio,
     setStatusBoth,
     speakers,
     targetLanguages,
   ]);
-
-  /** Ends the session; the server flushes remaining events, then closes. */
-  const stop = useCallback(() => {
-    if (statusRef.current !== "live") return;
-    setStatusBoth("stopping");
-
-    const recorder = recorderRef.current;
-    if (recorder && recorder.state !== "inactive") {
-      // Flush the final chunk before announcing the end of the session.
-      recorder.onstop = () => {
-        wsRef.current?.send(JSON.stringify({ type: "session.end" }));
-      };
-      recorder.stop();
-    } else {
-      wsRef.current?.send(JSON.stringify({ type: "session.end" }));
-    }
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-  }, [setStatusBoth]);
 
   // Tear everything down if the component unmounts mid-session.
   useEffect(() => {

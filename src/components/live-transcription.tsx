@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { Languages, Mic, Square } from "lucide-react";
 
-import { formatAudioTime } from "@/components/speaker-meta";
+import { formatAudioTime, speakerTint } from "@/components/speaker-meta";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { useLiveSession } from "@/hooks/use-live-session";
@@ -17,9 +17,11 @@ import { cn } from "@/lib/utils";
 
 /**
  * The live session view: one bubble per completed segment, in audio order.
- * Live speaker attribution is unreliable, so the UI shows none — the refined
- * transcript is where speakers appear. Segments still in flight stream into a
- * buffer at the bottom and become bubbles once segment.completed arrives.
+ * Bubbles are tinted by the session-stable speaker_id but all stay on the same
+ * side — roles are only resolved in the refined transcript, and a segment may
+ * be re-attributed mid-session, which just re-tints its bubble. Segments still
+ * in flight stream into a buffer at the bottom and become bubbles once
+ * segment.completed arrives.
  */
 export default function LiveTranscriptionView({
   recording,
@@ -36,6 +38,7 @@ export default function LiveTranscriptionView({
     recording.targetLanguages ?? [
       ...new Set(recording.speakers.flatMap((speaker) => speaker.languages)),
     ],
+    recording.mockAudio ?? false,
   );
 
   // A session started from "Start Recording" begins streaming right away.
@@ -88,6 +91,7 @@ export default function LiveTranscriptionView({
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-4">
       <SessionToolbar
         status={status}
+        mockAudio={recording.mockAudio ?? false}
         error={error}
         elapsedSeconds={elapsedSeconds}
         canRefine={sessionOver && recording.audioBlob !== null}
@@ -121,6 +125,7 @@ export default function LiveTranscriptionView({
 
 function SessionToolbar({
   status,
+  mockAudio,
   error,
   elapsedSeconds,
   canRefine,
@@ -129,6 +134,7 @@ function SessionToolbar({
   onRefine,
 }: {
   status: ReturnType<typeof useLiveSession>["status"];
+  mockAudio: boolean;
   error: string | null;
   elapsedSeconds: number;
   canRefine: boolean;
@@ -151,6 +157,11 @@ function SessionToolbar({
               <span className="relative inline-flex size-2.5 rounded-full bg-red-500" />
             </span>
             Recording · {formatAudioTime(elapsedSeconds)}
+          </span>
+        )}
+        {mockAudio && (
+          <span className="rounded-full bg-foreground/5 px-2 py-0.5 text-[10px] font-medium tracking-wide uppercase text-muted-foreground">
+            Mock audio
           </span>
         )}
         {status === "stopping" && (
@@ -197,7 +208,14 @@ function SegmentBubble({ segment }: { segment: LiveSegment }) {
   const translations = sortedTranslations(segment.translations);
 
   return (
-    <div className="flex max-w-[85%] flex-col gap-1 self-start rounded-3xl rounded-bl-md bg-muted px-4 py-3 shadow-sm ring-1 ring-foreground/5">
+    <div
+      className={cn(
+        // Speaker labels can be revised while the session runs, so the tint
+        // animates rather than snapping to the new colour.
+        "flex max-w-[85%] flex-col gap-1 self-start rounded-3xl rounded-bl-md px-4 py-3 shadow-sm ring-1 transition-colors duration-300",
+        speakerTint(segment.speakerId),
+      )}
+    >
       {segment.t0 !== null && (
         <div className="text-xs font-medium text-muted-foreground">
           {formatAudioTime(segment.t0)}

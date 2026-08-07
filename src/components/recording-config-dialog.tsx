@@ -9,7 +9,7 @@ import {
   type FormEvent,
 } from "react";
 import { useRouter } from "next/navigation";
-import { FileAudio, Mic, Minus, Plus, Upload } from "lucide-react";
+import { FileAudio, FlaskConical, Mic, Minus, Plus, Upload } from "lucide-react";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -46,6 +46,7 @@ import {
   useComboboxAnchor,
 } from "./ui/combobox";
 import { LANGUAGES, type LanguageOption } from "@/lib/languages";
+import { isMockAudioAvailable } from "@/lib/mock-audio";
 import { MAX_REFINE_BYTES } from "@/lib/backend/client";
 import type { SpeakerConfig, SpeakerRole } from "@/lib/backend/types";
 import { createRecording, startRefinement } from "@/lib/recordings-store";
@@ -214,8 +215,7 @@ export default function RecordingConfigDialog({
     onFileSelected(event.dataTransfer.files?.[0]);
   };
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const startSession = ({ mockAudio }: { mockAudio: boolean }) => {
     setHasSubmitted(true);
 
     if (
@@ -250,6 +250,7 @@ export default function RecordingConfigDialog({
       startedVia: mode,
       audioBlob: selectedFile ?? undefined,
       audioFileName: selectedFile?.name,
+      mockAudio,
     });
 
     if (isUpload) {
@@ -259,6 +260,11 @@ export default function RecordingConfigDialog({
     }
 
     router.push(`/recordings/${recording.id}`);
+  };
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    startSession({ mockAudio: false });
   };
 
   const title = isUpload
@@ -422,6 +428,17 @@ export default function RecordingConfigDialog({
                 </Button>
               }
             />
+            {!isUpload && isMockAudioAvailable && (
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={isStarting}
+                onClick={() => startSession({ mockAudio: true })}
+              >
+                <FlaskConical data-icon="inline-start" />
+                Mock Audio
+              </Button>
+            )}
             <Button type="submit" disabled={isStarting}>
               {isStarting ? (
                 <Spinner data-icon="inline-start" />
