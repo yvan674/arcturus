@@ -1,13 +1,16 @@
 FROM node:lts-alpine AS base
 
+# Enable pnpm through Corepack
+RUN corepack enable
+
 FROM base AS deps
 
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
-COPY package.json package-lock.json* .npmrc* ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc* ./
 
-RUN npm ci
+RUN pnpm install --frozen-lockfile
 
 # Rebuild from source if necessary
 FROM base AS builder
