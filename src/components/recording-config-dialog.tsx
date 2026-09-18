@@ -54,6 +54,13 @@ import { Spinner } from "./ui/spinner";
 
 type RecordingMode = "record" | "upload";
 
+/**
+ * The backend requires each speaker's `role` to be one of these values but
+ * doesn't use it beyond echoing it back — the app has no speaker-role
+ * concept, so this just cycles through the allowed values.
+ */
+const SPEAKER_ROLE_CYCLE: SpeakerRole[] = ["doctor", "patient", "interpreter"];
+
 type RecordingConfigDialogProps = {
   mode: RecordingMode;
 };
@@ -232,16 +239,11 @@ export default function RecordingConfigDialog({
     const languageCodes = speakerLanguages.map((language) => language.code);
     const speakers: SpeakerConfig[] = Array.from(
       { length: numSpeakers },
-      (_, index) => {
-        const role: SpeakerRole =
-          index === 0 ? "doctor" : index === 2 ? "interpreter" : "patient";
-
-        return {
-          id: `speaker-${index + 1}`,
-          role,
-          languages: languageCodes,
-        };
-      },
+      (_, index) => ({
+        id: `speaker-${index + 1}`,
+        role: SPEAKER_ROLE_CYCLE[index % SPEAKER_ROLE_CYCLE.length],
+        languages: languageCodes,
+      }),
     );
 
     const recording = createRecording({

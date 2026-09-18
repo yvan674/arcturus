@@ -7,6 +7,7 @@ import { formatAudioTime, speakerTint } from "@/components/speaker-meta";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { useLiveSession } from "@/hooks/use-live-session";
+import { useTypewriterText } from "@/hooks/use-typewriter-text";
 import { languageLabel } from "@/lib/languages";
 import {
   startRefinement,
@@ -225,6 +226,11 @@ function SegmentBubble({ segment }: { segment: LiveSegment }) {
       {translations.map(([language, text]) => (
         <TranslationLine key={language} language={language} text={text} />
       ))}
+      {segment.translationStatus === "failed" && (
+        <p className="text-sm leading-snug text-destructive italic">
+          Translation failed for this segment.
+        </p>
+      )}
     </div>
   );
 }
@@ -241,15 +247,39 @@ function TranscriptionBuffer({ pending }: { pending: LiveSegment[] }) {
         {pending.length > 0 ? "Transcribing…" : "Listening…"}
       </div>
       {pending.map((segment) => (
-        <div key={segment.segmentId} className="flex flex-col gap-1">
-          <p className="text-base leading-snug">{segment.sourceText}</p>
-          {sortedTranslations(segment.translations).map(([language, text]) => (
-            <TranslationLine key={language} language={language} text={text} />
-          ))}
-        </div>
+        <PendingSegment key={segment.segmentId} segment={segment} />
       ))}
     </div>
   );
+}
+
+/**
+ * A pending segment's source and translations both get overwritten in place
+ * as more deltas/revisions arrive, so each line is typed through
+ * useTypewriterText rather than rendered from the raw store value.
+ */
+function PendingSegment({ segment }: { segment: LiveSegment }) {
+  const sourceText = useTypewriterText(segment.sourceText);
+
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="text-base leading-snug">{sourceText}</p>
+      {sortedTranslations(segment.translations).map(([language, text]) => (
+        <AnimatedTranslationLine key={language} language={language} text={text} />
+      ))}
+    </div>
+  );
+}
+
+function AnimatedTranslationLine({
+  language,
+  text,
+}: {
+  language: string;
+  text: string;
+}) {
+  const animated = useTypewriterText(text);
+  return <TranslationLine language={language} text={animated} />;
 }
 
 function TranslationLine({

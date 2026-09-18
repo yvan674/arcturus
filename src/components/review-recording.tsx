@@ -11,7 +11,11 @@ import {
   UploadIcon,
 } from "lucide-react";
 
-import { formatAudioTime, roleMeta } from "@/components/speaker-meta";
+import {
+  formatAudioTime,
+  speakerLabel,
+  speakerTint,
+} from "@/components/speaker-meta";
 import {
   Attachment,
   AttachmentAction,
@@ -114,21 +118,38 @@ export default function ReviewRecordingView({
   );
 }
 
+type RefinePhaseEntry = { phase: RefineJobPhase; short: string; label: string };
+
 /**
  * The refinement pipeline as the user sees it. `percent` is weighted across
- * these same four phases by the backend, so the bar and the phase trail always
- * agree.
+ * these same phases by the backend, so the bar and the phase trail always
+ * agree. A terminology list adds four phases between transcribing and
+ * reviewing — jobs without one never report them.
  */
-const REFINE_PHASES: {
-  phase: RefineJobPhase;
-  short: string;
-  label: string;
-}[] = [
+const CORE_REFINE_PHASES: RefinePhaseEntry[] = [
   { phase: "decoding", short: "Decode", label: "Decoding audio" },
   { phase: "diarizing", short: "Speakers", label: "Separating speakers" },
   { phase: "transcribing", short: "Transcribe", label: "Transcribing speech" },
-  { phase: "reviewing", short: "Review", label: "Reviewing transcript" },
 ];
+
+const TERMINOLOGY_REFINE_PHASES: RefinePhaseEntry[] = [
+  { phase: "phonemizing", short: "Phonemes", label: "Recognizing phonemes" },
+  { phase: "matching", short: "Match", label: "Matching terminology" },
+  { phase: "verifying", short: "Verify", label: "Re-checking terminology" },
+  { phase: "resolving", short: "Resolve", label: "Resolving corrections" },
+];
+
+const REVIEWING_REFINE_PHASE: RefinePhaseEntry = {
+  phase: "reviewing",
+  short: "Review",
+  label: "Reviewing transcript",
+};
+
+function getRefinePhases(hasTerminology: boolean): RefinePhaseEntry[] {
+  return hasTerminology
+    ? [...CORE_REFINE_PHASES, ...TERMINOLOGY_REFINE_PHASES, REVIEWING_REFINE_PHASE]
+    : [...CORE_REFINE_PHASES, REVIEWING_REFINE_PHASE];
+}
 
 /** The diarizer's internal steps, reported only while diarizing. */
 const DIARIZATION_STEPS: Record<RefineJobStep, string> = {
@@ -157,13 +178,14 @@ function RefinementAttachment({ recording }: { recording: RecordingSession }) {
   }
 
   if (recording.status === "refining") {
-    const phaseIndex = REFINE_PHASES.findIndex(
+    const refinePhases = getRefinePhases(recording.refineTerminologyEnabled);
+    const phaseIndex = refinePhases.findIndex(
       (entry) => entry.phase === recording.refinePhase,
     );
     // `step` is only set while diarizing, where it is the more specific label.
     const label = recording.refineStep
       ? DIARIZATION_STEPS[recording.refineStep]
-      : (REFINE_PHASES[phaseIndex]?.label ?? "Waiting to process");
+      : (refinePhases[phaseIndex]?.label ?? "Waiting to process");
     const completed = recording.refineCompletedUnits;
     const total = recording.refineTotalUnits;
     const units = total ? `${completed ?? 0}/${total}` : null;
@@ -179,7 +201,7 @@ function RefinementAttachment({ recording }: { recording: RecordingSession }) {
             label={units ? `${label} · ${units}` : label}
             percent={percent}
           />
-          <PhaseTrail current={phaseIndex} />
+          <PhaseTrail phases={refinePhases} current={phaseIndex} />
         </AttachmentContent>
       </Attachment>
     );
@@ -256,11 +278,17 @@ function RefinementProgress({
   );
 }
 
-/** Decode → Speakers → Transcribe → Review, with the current phase lit up. */
-function PhaseTrail({ current }: { current: number }) {
+/** Decode → Speakers → Transcribe → [terminology phases] → Review, current phase lit up. */
+function PhaseTrail({
+  phases,
+  current,
+}: {
+  phases: RefinePhaseEntry[];
+  current: number;
+}) {
   return (
     <div className="mt-2 flex flex-wrap items-center gap-x-1 gap-y-0.5 text-[10px] font-medium tracking-wide uppercase">
-      {REFINE_PHASES.map((entry, index) => (
+      {phases.map((entry, index) => (
         <Fragment key={entry.phase}>
           {index > 0 && (
             <ChevronRightIcon className="size-3 text-muted-foreground/40" />
@@ -287,21 +315,12 @@ function formatFileSize(bytes: number): string {
 }
 
 function TurnCard({ turn }: { turn: RefinedTurn }) {
-  const meta = roleMeta(turn.role);
-  const Icon = meta.icon;
-
   return (
-    <Card size="sm" className="shadow-sm">
+    <Card size="sm" className={cn("shadow-sm", speakerTint(turn.speaker_id))}>
       <CardHeader>
-        <CardTitle
-          className={cn(
-            "flex items-center gap-1.5 text-xs font-medium",
-            meta.labelClass,
-          )}
-        >
-          <Icon className="size-3.5" />
-          {meta.label}
-          <span className="font-normal text-muted-foreground">
+        <CardTitle className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+          {speakerLabel(turn.speaker_id)}
+          <span className="font-normal">
             · {formatAudioTime(turn.t0)}–{formatAudioTime(turn.t1)}
           </span>
         </CardTitle>

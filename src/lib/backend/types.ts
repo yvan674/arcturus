@@ -48,13 +48,29 @@ export type LiveServerEvent =
   | { type: "session.ready" }
   | {
       /**
-       * Upsert by segment_id: `text` is the latest full source hypothesis
-       * for the segment, replacing whatever was shown before — progressive
-       * Whisper hypotheses can revise earlier words, so never concatenate.
+       * Full source hypothesis for the segment, replacing whatever was shown
+       * before — progressive Whisper hypotheses can revise earlier words, so
+       * never concatenate. `revision` increases per segment (not across the
+       * session); ignore any revision that isn't greater than the last one
+       * applied.
        */
       type: "transcript.source.delta";
       segment_id: string;
+      revision: number;
       text: string;
+    }
+  | {
+      /**
+       * Full provisional translations of the source snapshot identified by
+       * `revision` (a *separate* counter from the source delta's revision).
+       * Can lag the source, so `source_text` here may be stale — never use it
+       * to overwrite newer source text, only the `translations` map.
+       */
+      type: "transcript.translation.update";
+      segment_id: string;
+      revision: number;
+      source_text: string;
+      translations: Record<string, string>;
     }
   | {
       type: "segment.completed";
@@ -67,8 +83,11 @@ export type LiveServerEvent =
        * target_languages entry. Correction and all translations come from
        * one async chat-completions call and arrive together here — this
        * always fully replaces the segment, never merge with a prior value.
+       * Empty when `translation_status` is "failed".
        */
       translations: Record<string, string>;
+      /** "failed" closes the segment without claiming provisional translations were final. */
+      translation_status: "completed" | "failed";
       /** Anonymous voice label (e.g. SPEAKER_00), stable within the session. */
       speaker_id: string | null;
       speaker_confidence: number | null;
@@ -79,7 +98,14 @@ export type LiveServerEvent =
       speaker_id: string | null;
       speaker_confidence: number | null;
     }
-  | { type: "error"; code: string; message: string; recoverable: boolean }
+  | {
+      type: "error";
+      code: string;
+      message: string;
+      recoverable: boolean;
+      /** Set for a per-segment failure (e.g. refinement_failed); null/absent for session-wide errors. */
+      segment_id?: string | null;
+    }
   | { type: "session.ended" };
 
 /** One chronological speaking turn in the refined transcript. */
@@ -101,6 +127,12 @@ export type RefineJobPhase =
   | "decoding"
   | "diarizing"
   | "transcribing"
+  // Only reported when a terminology list was submitted; run between
+  // transcribing and reviewing.
+  | "phonemizing"
+  | "matching"
+  | "verifying"
+  | "resolving"
   | "reviewing";
 
 /** The diarizer's internal steps; only reported while `phase` is diarizing. */

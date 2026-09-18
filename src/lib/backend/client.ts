@@ -25,6 +25,7 @@ export function submitRefinement(
   audio: Blob,
   speakers: SpeakerConfig[],
   filename = "session.webm",
+  terminology: string[] = [],
   callbacks: UploadCallbacks = {},
 ): Promise<RefineJobSubmission> {
   if (audio.size > MAX_REFINE_BYTES) {
@@ -35,7 +36,14 @@ export function submitRefinement(
 
   const form = new FormData();
   form.append("audio", audio, filename);
-  form.append("config", JSON.stringify({ speakers }));
+  // Omit the field entirely when empty: sending it (even []) is treated the
+  // same by the backend, but omitting is clearer about intent.
+  form.append(
+    "config",
+    JSON.stringify(
+      terminology.length > 0 ? { speakers, terminology } : { speakers },
+    ),
+  );
 
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();

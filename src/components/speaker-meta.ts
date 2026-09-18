@@ -1,65 +1,8 @@
-import {
-  CircleHelp,
-  Languages,
-  Stethoscope,
-  User,
-  type LucideIcon,
-} from "lucide-react";
-
-import type { SpeakerRole } from "@/lib/backend/types";
-
-export interface RoleMeta {
-  label: string;
-  icon: LucideIcon;
-  /** Tiny role label above a bubble / card. */
-  labelClass: string;
-  /** Bubble background tint. */
-  bubbleClass: string;
-  /** Which side of the conversation the bubble sits on. */
-  align: "start" | "end" | "center";
-}
-
-const ROLE_META: Record<SpeakerRole, RoleMeta> = {
-  doctor: {
-    label: "Doctor",
-    icon: Stethoscope,
-    labelClass: "text-sky-700 dark:text-sky-300",
-    bubbleClass: "bg-sky-500/10",
-    align: "start",
-  },
-  patient: {
-    label: "Patient",
-    icon: User,
-    labelClass: "text-emerald-700 dark:text-emerald-300",
-    bubbleClass: "bg-emerald-500/10",
-    align: "end",
-  },
-  interpreter: {
-    label: "Interpreter",
-    icon: Languages,
-    labelClass: "text-violet-700 dark:text-violet-300",
-    bubbleClass: "bg-violet-500/10",
-    align: "center",
-  },
-};
-
-const UNKNOWN_META: RoleMeta = {
-  label: "Unknown speaker",
-  icon: CircleHelp,
-  labelClass: "text-muted-foreground",
-  bubbleClass: "bg-muted",
-  align: "start",
-};
-
-export function roleMeta(role: SpeakerRole | null): RoleMeta {
-  return role ? ROLE_META[role] : UNKNOWN_META;
-}
-
 /**
- * Bubble tints for the anonymous voice labels the live session emits
- * (SPEAKER_00, …). Roles are unknown during a live session, so colour is the
- * only speaker cue — the tints below deliberately match the role palette so a
- * segment does not change hue family when the refined transcript names it.
+ * Bubble tints for speaker ids — the anonymous voice labels the live session
+ * emits (SPEAKER_00, …) as well as the `speaker-1`, `speaker-2`, … ids we
+ * assign for refinement. There's no concept of who a speaker "is"; colour and
+ * the "Speaker N" label are the only cues distinguishing them.
  */
 const SPEAKER_TINTS = [
   "bg-sky-500/10 ring-sky-500/20",
@@ -80,6 +23,13 @@ const NO_SPEAKER_TINT = "bg-muted ring-foreground/5";
 export function speakerTint(speakerId: string | null): string {
   if (!speakerId) return NO_SPEAKER_TINT;
   return SPEAKER_TINTS[speakerIndex(speakerId) % SPEAKER_TINTS.length];
+}
+
+/** "Speaker 3" from a `speaker-3`/`SPEAKER_03`-style id; the raw id otherwise. */
+export function speakerLabel(speakerId: string | null): string {
+  if (!speakerId) return "Unknown speaker";
+  const trailingDigits = /(\d+)$/.exec(speakerId);
+  return trailingDigits ? `Speaker ${Number(trailingDigits[1])}` : `Speaker ${speakerId}`;
 }
 
 /** Trailing digits of SPEAKER_07-style labels; a hash for anything else. */

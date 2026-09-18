@@ -18,6 +18,7 @@ import {
 } from "@/lib/mock-audio";
 import {
   setLiveSegmentSourceText,
+  setLiveSegmentTranslation,
   updateRecording,
   upsertLiveSegment,
 } from "@/lib/recordings-store";
@@ -192,7 +193,22 @@ export function useLiveSession(
           break;
         }
         case "transcript.source.delta":
-          setLiveSegmentSourceText(recordingId, event.segment_id, event.text);
+          setLiveSegmentSourceText(
+            recordingId,
+            event.segment_id,
+            event.revision,
+            event.text,
+          );
+          break;
+        case "transcript.translation.update":
+          // `event.source_text` is that snapshot's source, which can lag the
+          // current one — only the translations map is applied here.
+          setLiveSegmentTranslation(
+            recordingId,
+            event.segment_id,
+            event.revision,
+            event.translations,
+          );
           break;
         case "segment.completed":
           upsertLiveSegment(recordingId, {
@@ -201,6 +217,7 @@ export function useLiveSession(
             t1: event.t1,
             sourceText: event.source_text,
             translations: event.translations,
+            translationStatus: event.translation_status,
             speakerId: event.speaker_id,
             speakerConfidence: event.speaker_confidence,
             completed: true,
@@ -214,6 +231,12 @@ export function useLiveSession(
           });
           break;
         case "error":
+          if (event.segment_id) {
+            // Per-segment failure (e.g. refinement_failed): the following
+            // segment.completed carries translation_status: "failed", which
+            // the bubble already surfaces — no session-wide banner needed.
+            break;
+          }
           if (event.recoverable) {
             // e.g. diarization_unavailable: segments come without speaker
             // labels but everything else still works.

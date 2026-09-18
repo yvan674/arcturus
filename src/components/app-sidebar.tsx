@@ -17,6 +17,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Spinner } from "./ui/spinner";
 import Link from "next/link";
+import { SettingsSheet } from "./settings-sheet";
 import {
   useRecordingsHydrated,
   useRecordingsList,
@@ -122,6 +123,9 @@ export function AppSidebar() {
       </SidebarContent>
       <SidebarFooter className="border-t">
         <SidebarMenu>
+          <SidebarMenuItem>
+            <SettingsSheet />
+          </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton
               onClick={handleSigningOut}

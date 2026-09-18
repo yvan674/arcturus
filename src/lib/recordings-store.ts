@@ -9,6 +9,7 @@ import type {
   RefineResult,
   SpeakerConfig,
 } from "./backend/types";
+import { getTerminology } from "./terminology-store";
 
 /**
  * The backend is stateless, so the frontend is the source of truth for the
@@ -23,12 +24,23 @@ export interface LiveSegment {
   t0: number | null;
   t1: number | null;
   sourceText: string;
+  /** Last applied transcript.source.delta revision; -1 before any arrives. */
+  sourceRevision: number;
   /**
    * ISO 639-1 code → translated text for that language. Empty while the
    * segment is only a live source hypothesis; set wholesale by
-   * segment.completed, which always carries the full map for that segment.
+   * segment.completed or transcript.translation.update, which always carry
+   * the full map for that segment.
    */
   translations: Record<string, string>;
+  /**
+   * Last applied transcript.translation.update revision; -1 before any
+   * arrives. A separate counter from sourceRevision — the two update
+   * independently and must never be conflated.
+   */
+  translationRevision: number;
+  /** Set by segment.completed; null until then. */
+  translationStatus: "completed" | "failed" | null;
   /** Anonymous voice label (e.g. SPEAKER_00), stable within the session. */
   speakerId: string | null;
   speakerConfidence: number | null;
@@ -74,6 +86,8 @@ export interface RecordingSession {
   refineStep: RefineJobStep | null;
   refineMessage: string | null;
   refineProgress: number | null;
+  /** Whether this job was submitted with a terminology list (extra phases run). */
+  refineTerminologyEnabled: boolean;
   /** Progress inside the current phase; null in single-call phases. */
   refineCompletedUnits: number | null;
   refineTotalUnits: number | null;
@@ -302,6 +316,7 @@ export function createRecording(input: {
     refineStep: null,
     refineMessage: null,
     refineProgress: null,
+    refineTerminologyEnabled: false,
     refineCompletedUnits: null,
     refineTotalUnits: null,
     refined: null,
@@ -348,7 +363,10 @@ export function upsertLiveSegment(
     t0: null,
     t1: null,
     sourceText: "",
+    sourceRevision: -1,
     translations: {},
+    translationRevision: -1,
+    translationStatus: null,
     speakerId: null,
     speakerConfidence: null,
     completed: false,
@@ -377,16 +395,45 @@ export function upsertLiveSegment(
  * Set a segment's live source hypothesis from transcript.source.delta.
  * `text` is the latest full hypothesis, not an increment — replace, don't
  * append, since progressive Whisper hypotheses can revise earlier words.
+ * Revisions increase per segment; a stale or repeated revision is dropped.
  */
 export function setLiveSegmentSourceText(
   recordingId: string,
   segmentId: string,
+  revision: number,
   text: string,
 ): void {
   const existing = state.recordings[recordingId]?.liveSegments[segmentId];
   // segment.completed already carried the final text; late deltas are stale.
   if (existing?.completed) return;
-  upsertLiveSegment(recordingId, { segmentId, sourceText: text });
+  if (existing && revision <= existing.sourceRevision) return;
+  upsertLiveSegment(recordingId, {
+    segmentId,
+    sourceText: text,
+    sourceRevision: revision,
+  });
+}
+
+/**
+ * Set a segment's provisional translations from transcript.translation.update.
+ * Uses its own revision counter, independent of the source delta's — a
+ * translation can lag the source, so this never touches sourceText/
+ * sourceRevision, only the translations map.
+ */
+export function setLiveSegmentTranslation(
+  recordingId: string,
+  segmentId: string,
+  revision: number,
+  translations: Record<string, string>,
+): void {
+  const existing = state.recordings[recordingId]?.liveSegments[segmentId];
+  if (existing?.completed) return;
+  if (existing && revision <= existing.translationRevision) return;
+  upsertLiveSegment(recordingId, {
+    segmentId,
+    translations,
+    translationRevision: revision,
+  });
 }
 
 /**
@@ -403,6 +450,8 @@ export async function startRefinement(recordingId: string): Promise<void> {
     return;
   }
 
+  const terminology = getTerminology();
+
   updateRecording(recordingId, {
     status: "uploading",
     refineError: null,
@@ -411,6 +460,7 @@ export async function startRefinement(recordingId: string): Promise<void> {
     refineStep: null,
     refineMessage: "Uploading recording",
     refineProgress: 0,
+    refineTerminologyEnabled: terminology.length > 0,
     refineCompletedUnits: null,
     refineTotalUnits: null,
   });
@@ -420,6 +470,7 @@ export async function startRefinement(recordingId: string): Promise<void> {
       recording.audioBlob,
       recording.speakers,
       recording.audioFileName ?? "session.webm",
+      terminology,
       {
         onProgress: (percent) => {
           updateRecording(recordingId, { refineProgress: percent });
