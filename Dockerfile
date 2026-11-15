@@ -1,8 +1,5 @@
 FROM node:26-alpine AS base
 
-# Enable pnpm through Corepack
-RUN corepack enable
-
 FROM base AS deps
 
 RUN apk add --no-cache libc6-compat
@@ -10,10 +7,11 @@ WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc* ./
 
-RUN pnpm install --frozen-lockfile
+RUN npm install -g "$(node -p 'require("./package.json").packageManager')" \
+    && pnpm install --frozen-lockfile
 
 # Rebuild from source if necessary
-FROM base AS builder
+FROM deps AS builder
 
 ARG NEXT_PUBLIC_FIREBASE_API_KEY
 ENV NEXT_PUBLIC_FIREBASE_API_KEY=$NEXT_PUBLIC_FIREBASE_API_KEY
@@ -41,7 +39,7 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-RUN npm run build
+RUN pnpm run build
 
 FROM base AS runner
 WORKDIR /app
