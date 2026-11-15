@@ -2,14 +2,13 @@
 
 import {
   useId,
-  useMemo,
   useRef,
   useState,
   type DragEvent,
   type FormEvent,
 } from "react";
 import { useRouter } from "next/navigation";
-import { FileAudio, FlaskConical, Mic, Minus, Plus, Upload } from "lucide-react";
+import { FileAudio, FlaskConical, Mic, Upload } from "lucide-react";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -28,120 +27,21 @@ import {
   FieldGroup,
   FieldLabel,
 } from "./ui/field";
-import { Input } from "./ui/input";
-import {
-  Combobox,
-  ComboboxChip,
-  ComboboxChips,
-  ComboboxChipsInput,
-  ComboboxCollection,
-  ComboboxContent,
-  ComboboxEmpty,
-  ComboboxGroup,
-  ComboboxItem,
-  ComboboxLabel,
-  ComboboxList,
-  ComboboxSeparator,
-  ComboboxValue,
-  useComboboxAnchor,
-} from "./ui/combobox";
-import { LANGUAGES, type LanguageOption } from "@/lib/languages";
-import { isMockAudioAvailable } from "@/lib/mock-audio";
+import type { LanguageOption } from "@/lib/languages";
 import { MAX_REFINE_BYTES } from "@/lib/backend/client";
-import type { SpeakerConfig, SpeakerRole } from "@/lib/backend/types";
 import { createRecording, startRefinement } from "@/lib/recordings-store";
 import { Spinner } from "./ui/spinner";
+import {
+  buildSpeakers,
+  LanguageSelectCombobox,
+  SpeakerCountInput,
+} from "./speaker-config-fields";
 
 type RecordingMode = "record" | "upload";
-
-/**
- * The backend requires each speaker's `role` to be one of these values but
- * doesn't use it beyond echoing it back — the app has no speaker-role
- * concept, so this just cycles through the allowed values.
- */
-const SPEAKER_ROLE_CYCLE: SpeakerRole[] = ["doctor", "patient", "interpreter"];
 
 type RecordingConfigDialogProps = {
   mode: RecordingMode;
 };
-
-type LanguageOptionGroup = {
-  value: string;
-  items: LanguageOption[];
-};
-
-type LanguageSelectComboboxProps = {
-  id: string;
-  items: LanguageOptionGroup[];
-  value: LanguageOption[];
-  onValueChange: (value: LanguageOption[]) => void;
-  invalid: boolean;
-  errorId: string;
-};
-
-function LanguageSelectCombobox({
-  id,
-  items,
-  value,
-  onValueChange,
-  invalid,
-  errorId,
-}: LanguageSelectComboboxProps) {
-  const anchor = useComboboxAnchor();
-
-  return (
-    <Combobox
-      multiple
-      autoHighlight
-      items={items}
-      value={value}
-      onValueChange={onValueChange}
-      itemToStringLabel={(language) => language.label}
-      itemToStringValue={(language) => language.code}
-      isItemEqualToValue={(language, selectedLanguage) =>
-        language.code === selectedLanguage.code
-      }
-    >
-      <ComboboxChips ref={anchor} className="w-full">
-        <ComboboxValue>
-          {(values: LanguageOption[]) => (
-            <>
-              {values.map((language) => (
-                <ComboboxChip key={language.code}>
-                  {language.label}
-                </ComboboxChip>
-              ))}
-              <ComboboxChipsInput
-                id={id}
-                placeholder="Select languages"
-                aria-invalid={invalid}
-                aria-describedby={invalid ? errorId : undefined}
-              />
-            </>
-          )}
-        </ComboboxValue>
-      </ComboboxChips>
-      <ComboboxContent anchor={anchor}>
-        <ComboboxEmpty>No languages found.</ComboboxEmpty>
-        <ComboboxList>
-          {(group: LanguageOptionGroup, index: number) => (
-            <ComboboxGroup key={group.value} items={group.items}>
-              <ComboboxLabel>{group.value}</ComboboxLabel>
-              <ComboboxCollection>
-                {(language: LanguageOption) => (
-                  <ComboboxItem key={language.code} value={language}>
-                    {language.label}
-                  </ComboboxItem>
-                )}
-              </ComboboxCollection>
-              {index < items.length - 1 && <ComboboxSeparator />}
-            </ComboboxGroup>
-          )}
-        </ComboboxList>
-      </ComboboxContent>
-    </Combobox>
-  );
-}
 
 export default function RecordingConfigDialog({
   mode,
@@ -170,28 +70,6 @@ export default function RecordingConfigDialog({
   const speakerLanguagesInvalid =
     hasSubmitted && speakerLanguages.length === 0;
   const fileInvalid = isUpload && hasSubmitted && selectedFile === null;
-
-  const decrementSpeakers = () => {
-    setNumSpeakers((current) => Math.max(1, current - 1));
-  };
-
-  const incrementSpeakers = () => {
-    setNumSpeakers((current) => Math.min(8, current + 1));
-  };
-
-  const languageOptions = useMemo<LanguageOptionGroup[]>(
-    () => [
-      {
-        value: "Frequent",
-        items: LANGUAGES.frequent,
-      },
-      {
-        value: "Others",
-        items: LANGUAGES.others,
-      },
-    ],
-    [],
-  );
 
   const onFileSelected = (file?: File) => {
     if (!file) return;
@@ -236,14 +114,9 @@ export default function RecordingConfigDialog({
 
     setIsStarting(true);
 
-    const languageCodes = speakerLanguages.map((language) => language.code);
-    const speakers: SpeakerConfig[] = Array.from(
-      { length: numSpeakers },
-      (_, index) => ({
-        id: `speaker-${index + 1}`,
-        role: SPEAKER_ROLE_CYCLE[index % SPEAKER_ROLE_CYCLE.length],
-        languages: languageCodes,
-      }),
+    const speakers = buildSpeakers(
+      numSpeakers,
+      speakerLanguages.map((language) => language.code),
     );
 
     const recording = createRecording({
@@ -348,38 +221,11 @@ export default function RecordingConfigDialog({
               <FieldDescription>
                 The number of speakers who will speak during the recording.
               </FieldDescription>
-              <div className="flex flex-row gap-3">
-                <Button
-                  type="button"
-                  onClick={decrementSpeakers}
-                  variant="outline"
-                >
-                  <Minus />
-                </Button>
-                <Input
-                  id={numSpeakersId}
-                  type="number"
-                  max={8}
-                  value={numSpeakers}
-                  onChange={(event) => {
-                    const nextValue = Number(event.target.value);
-                    setNumSpeakers(
-                      Number.isNaN(nextValue)
-                        ? 1
-                        : Math.min(8, Math.max(1, nextValue)),
-                    );
-                  }}
-                  min={1}
-                  className="w-20 text-center [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                />
-                <Button
-                  type="button"
-                  onClick={incrementSpeakers}
-                  variant="outline"
-                >
-                  <Plus />
-                </Button>
-              </div>
+              <SpeakerCountInput
+                id={numSpeakersId}
+                value={numSpeakers}
+                onValueChange={setNumSpeakers}
+              />
             </Field>
             <Field data-invalid={targetLanguagesInvalid}>
               <FieldLabel htmlFor={targetLanguagesId}>
@@ -388,7 +234,6 @@ export default function RecordingConfigDialog({
               <FieldDescription>Languages to translate into.</FieldDescription>
               <LanguageSelectCombobox
                 id={targetLanguagesId}
-                items={languageOptions}
                 value={targetLanguages}
                 onValueChange={setTargetLanguages}
                 invalid={targetLanguagesInvalid}
@@ -409,7 +254,6 @@ export default function RecordingConfigDialog({
               </FieldDescription>
               <LanguageSelectCombobox
                 id={speakerLanguagesId}
-                items={languageOptions}
                 value={speakerLanguages}
                 onValueChange={setSpeakerLanguages}
                 invalid={speakerLanguagesInvalid}
@@ -430,7 +274,7 @@ export default function RecordingConfigDialog({
                 </Button>
               }
             />
-            {!isUpload && isMockAudioAvailable && (
+            {!isUpload && (
               <Button
                 type="button"
                 variant="secondary"

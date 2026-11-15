@@ -8,21 +8,25 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { useLiveSession } from "@/hooks/use-live-session";
 import { useTypewriterText } from "@/hooks/use-typewriter-text";
+import type { MedicalTerm } from "@/lib/backend/types";
 import { languageLabel } from "@/lib/languages";
 import {
   startRefinement,
   type LiveSegment,
+  type LiveTurn,
   type RecordingSession,
 } from "@/lib/recordings-store";
 import { cn } from "@/lib/utils";
 
 /**
- * The live session view: one bubble per completed segment, in audio order.
- * Bubbles are tinted by the session-stable speaker_id but all stay on the same
- * side — roles are only resolved in the refined transcript, and a segment may
- * be re-attributed mid-session, which just re-tints its bubble. Segments still
- * in flight stream into a buffer at the bottom and become bubbles once
- * segment.completed arrives.
+ * The live session view: one bubble per speech turn, in audio order. A bubble
+ * opens on turn.started (before any text) and its segments type into it in
+ * place as source deltas, confirmations and translations arrive. Turns are not
+ * speaker-attributed, so a turn whose segments carry different speaker_ids is
+ * split into one bubble per speaker run. Bubbles are tinted by the
+ * session-stable speaker_id but all stay on the same side — roles are only
+ * resolved in the refined transcript, and a segment may be re-attributed
+ * mid-session, which just re-tints its bubble.
  */
 export default function LiveTranscriptionView({
   recording,
@@ -55,29 +59,31 @@ export default function LiveTranscriptionView({
     }
   }, [recording.startedVia, recording.status, start]);
 
-  const { completed, pending } = useMemo(() => {
-    const all = Object.values(recording.liveSegments);
-    return {
-      completed: all
-        .filter((s) => s.completed)
-        .sort((a, b) => (a.t0 ?? 0) - (b.t0 ?? 0)),
-      pending: all.filter((s) => !s.completed && s.sourceText.length > 0),
-    };
-  }, [recording.liveSegments]);
-
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const pendingTextLength = pending.reduce(
-    (n, s) => n + s.sourceText.length,
-    0,
-  );
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [completed.length, pendingTextLength]);
-
   const sessionOver =
     recording.status === "live-ended" ||
     status === "ended" ||
     status === "error";
+  const sessionActive = status === "live" || status === "stopping";
+
+  const bubbles = useMemo(
+    () =>
+      buildBubbles(recording.liveSegments, recording.liveTurns ?? {}).filter(
+        // A turn with no text yet shows a typing indicator while the session
+        // runs; if the session ended before its turn.ended, drop it.
+        (bubble) => bubble.segments.length > 0 || (sessionActive && bubble.open),
+      ),
+    [recording.liveSegments, recording.liveTurns, sessionActive],
+  );
+
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const textLength = bubbles.reduce(
+    (n, bubble) =>
+      bubble.segments.reduce((m, s) => m + s.sourceText.length, n),
+    0,
+  );
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [bubbles.length, textLength]);
 
   if (recording.startedVia === "upload") {
     return (
@@ -104,21 +110,18 @@ export default function LiveTranscriptionView({
         }}
       />
 
-      {completed.length === 0 && pending.length === 0 && status === "live" && (
+      {bubbles.length === 0 && status === "live" && (
         <EmptyState>
           Listening — speech will appear here as bubbles.
         </EmptyState>
       )}
 
       <div className="flex flex-col gap-3">
-        {completed.map((segment) => (
-          <SegmentBubble key={segment.segmentId} segment={segment} />
+        {bubbles.map((bubble) => (
+          <TurnBubble key={bubble.key} bubble={bubble} />
         ))}
       </div>
 
-      {(status === "live" || status === "stopping") && (
-        <TranscriptionBuffer pending={pending} />
-      )}
       <div ref={bottomRef} className="pb-20" />
     </div>
   );
@@ -205,27 +208,173 @@ function SessionToolbar({
   );
 }
 
-function SegmentBubble({ segment }: { segment: LiveSegment }) {
-  const translations = sortedTranslations(segment.translations);
+interface Bubble {
+  key: string;
+  t0: number | null;
+  speakerId: string | null;
+  /** The turn may still gain segments (no turn.ended yet). */
+  open: boolean;
+  segments: LiveSegment[];
+}
 
+/**
+ * Groups segments into turn bubbles, ordered by audio time. Segments finish
+ * out of order, so they're sorted by t0 within the turn; those still without
+ * a t0 (not yet confirmed) go last. Recordings saved before turns existed
+ * have no turnId, so each completed segment becomes its own bubble.
+ */
+function buildBubbles(
+  segments: Record<string, LiveSegment>,
+  turns: Record<string, LiveTurn>,
+): Bubble[] {
+  const groups = new Map<
+    string,
+    { t0: number | null; open: boolean; segments: LiveSegment[] }
+  >();
+
+  for (const turn of Object.values(turns)) {
+    groups.set(turn.turnId, { t0: turn.t0, open: !turn.ended, segments: [] });
+  }
+
+  for (const segment of Object.values(segments)) {
+    const visible = segment.completed || segment.sourceText.length > 0;
+    if (!segment.turnId) {
+      // Legacy segment: only completed ones were ever shown as bubbles.
+      if (segment.completed) {
+        groups.set(`segment:${segment.segmentId}`, {
+          t0: segment.t0,
+          open: false,
+          segments: [segment],
+        });
+      }
+      continue;
+    }
+    let group = groups.get(segment.turnId);
+    if (!group) {
+      group = { t0: null, open: false, segments: [] };
+      groups.set(segment.turnId, group);
+    }
+    if (visible) group.segments.push(segment);
+  }
+
+  const bubbles: Bubble[] = [];
+  const orderedGroups = [...groups.entries()]
+    .map(([key, group]) => {
+      group.segments.sort(
+        (a, b) => (a.t0 ?? Infinity) - (b.t0 ?? Infinity),
+      );
+      return {
+        key,
+        ...group,
+        t0: group.t0 ?? group.segments[0]?.t0 ?? null,
+      };
+    })
+    .sort((a, b) => (a.t0 ?? Infinity) - (b.t0 ?? Infinity));
+
+  for (const group of orderedGroups) {
+    if (group.segments.length === 0) {
+      bubbles.push({
+        key: group.key,
+        t0: group.t0,
+        speakerId: null,
+        open: group.open,
+        segments: [],
+      });
+      continue;
+    }
+
+    // Split by speaker: a segment without a speaker yet joins the current
+    // run; a different known speaker starts a new bubble.
+    const runs: Bubble[] = [];
+    for (const segment of group.segments) {
+      const run = runs.at(-1);
+      if (
+        run &&
+        (segment.speakerId === null ||
+          run.speakerId === null ||
+          segment.speakerId === run.speakerId)
+      ) {
+        run.segments.push(segment);
+        run.speakerId ??= segment.speakerId;
+      } else {
+        runs.push({
+          // The turn id keeps the first run's bubble mounted across splits.
+          key: runs.length === 0 ? group.key : `${group.key}:${segment.segmentId}`,
+          t0: runs.length === 0 ? group.t0 : segment.t0,
+          speakerId: segment.speakerId,
+          open: false,
+          segments: [segment],
+        });
+      }
+    }
+    const lastRun = runs.at(-1);
+    if (lastRun) lastRun.open = group.open;
+    bubbles.push(...runs);
+  }
+
+  return bubbles;
+}
+
+function TurnBubble({ bubble }: { bubble: Bubble }) {
   return (
     <div
       className={cn(
         // Speaker labels can be revised while the session runs, so the tint
         // animates rather than snapping to the new colour.
         "flex max-w-[85%] flex-col gap-1 self-start rounded-3xl rounded-bl-md px-4 py-3 shadow-sm ring-1 transition-colors duration-300",
-        speakerTint(segment.speakerId),
+        speakerTint(bubble.speakerId),
       )}
     >
-      {segment.t0 !== null && (
+      {bubble.t0 !== null && (
         <div className="text-xs font-medium text-muted-foreground">
-          {formatAudioTime(segment.t0)}
+          {formatAudioTime(bubble.t0)}
         </div>
       )}
-      <p className="text-base leading-snug">{segment.sourceText}</p>
-      {translations.map(([language, text]) => (
-        <TranslationLine key={language} language={language} text={text} />
+      {bubble.segments.length === 0 ? (
+        <TypingIndicator />
+      ) : (
+        <div className="flex flex-col gap-2">
+          {bubble.segments.map((segment) => (
+            <SegmentContent key={segment.segmentId} segment={segment} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One segment inside a turn bubble. Source and translations are overwritten
+ * in place as revisions arrive (and once more when the LLM-corrected final
+ * lands), so each line is typed through useTypewriterText rather than
+ * rendered from the raw store value. Translations stay visibly provisional
+ * until segment.completed.
+ */
+function SegmentContent({ segment }: { segment: LiveSegment }) {
+  const sourceText = useTypewriterText(segment.sourceText);
+  const provisional = !segment.completed;
+
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="text-base leading-snug">
+        <HighlightedText
+          text={sourceText}
+          terms={segment.medicalTerms ?? []}
+        />
+      </p>
+      {sortedTranslations(segment.translations).map(([language, text]) => (
+        <AnimatedTranslationLine
+          key={language}
+          language={language}
+          text={text}
+          provisional={provisional}
+        />
       ))}
+      {segment.sourceConfirmed && provisional && (
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Spinner className="size-3" /> Translating…
+        </p>
+      )}
       {segment.translationStatus === "failed" && (
         <p className="text-sm leading-snug text-destructive italic">
           Translation failed for this segment.
@@ -236,36 +385,91 @@ function SegmentBubble({ segment }: { segment: LiveSegment }) {
 }
 
 /**
- * The buffer at the bottom of the screen: segments the server is still
- * transcribing, updating live as source and translation deltas arrive.
+ * Source text with the LLM's possibly-misheard medical terms marked. The
+ * offsets refer to the text the server analysed, which may not be what's on
+ * screen (a newer hypothesis, or a typewriter animation mid-way), so each term
+ * falls back to a text search and is skipped if it can't be found.
  */
-function TranscriptionBuffer({ pending }: { pending: LiveSegment[] }) {
-  return (
-    <div className="sticky bottom-4 z-10 flex flex-col gap-3 rounded-3xl border bg-background/95 p-4 shadow-md backdrop-blur">
-      <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-        <Mic className={cn("size-3", pending.length > 0 && "animate-pulse")} />
-        {pending.length > 0 ? "Transcribing…" : "Listening…"}
-      </div>
-      {pending.map((segment) => (
-        <PendingSegment key={segment.segmentId} segment={segment} />
-      ))}
-    </div>
-  );
+function HighlightedText({
+  text,
+  terms,
+}: {
+  text: string;
+  terms: MedicalTerm[];
+}) {
+  const ranges = resolveTermRanges(text, terms);
+  if (ranges.length === 0) return text;
+
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+  for (const [start, end] of ranges) {
+    if (start > cursor) parts.push(text.slice(cursor, start));
+    parts.push(
+      <mark
+        key={start}
+        title="Possible medical term — may have been misheard. The refined transcript will check it."
+        className="rounded-sm bg-amber-400/25 px-0.5 text-inherit underline decoration-amber-500 decoration-dotted underline-offset-4"
+      >
+        {text.slice(start, end)}
+      </mark>,
+    );
+    cursor = end;
+  }
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return parts;
 }
 
-/**
- * A pending segment's source and translations both get overwritten in place
- * as more deltas/revisions arrive, so each line is typed through
- * useTypewriterText rather than rendered from the raw store value.
- */
-function PendingSegment({ segment }: { segment: LiveSegment }) {
-  const sourceText = useTypewriterText(segment.sourceText);
+/** Non-overlapping [start, end) UTF-16 ranges of the terms found in `text`. */
+function resolveTermRanges(
+  text: string,
+  terms: MedicalTerm[],
+): [number, number][] {
+  const ranges: [number, number][] = [];
+  for (const term of terms) {
+    if (!term.text) continue;
+    let start = codePointToUtf16Index(text, term.start);
+    let end = codePointToUtf16Index(text, term.end);
+    if (start === null || end === null || text.slice(start, end) !== term.text) {
+      const found = text.indexOf(term.text);
+      if (found === -1) continue;
+      start = found;
+      end = found + term.text.length;
+    }
+    ranges.push([start, end]);
+  }
 
+  ranges.sort((a, b) => a[0] - b[0]);
+  const merged: [number, number][] = [];
+  for (const range of ranges) {
+    const last = merged.at(-1);
+    if (last && range[0] < last[1]) continue;
+    merged.push(range);
+  }
+  return merged;
+}
+
+/** The backend counts offsets in code points; JS strings index UTF-16 units. */
+function codePointToUtf16Index(text: string, codePoints: number): number | null {
+  let index = 0;
+  for (let i = 0; i < codePoints; i++) {
+    if (index >= text.length) return null;
+    index += (text.codePointAt(index) ?? 0) > 0xffff ? 2 : 1;
+  }
+  return index;
+}
+
+function TypingIndicator() {
   return (
-    <div className="flex flex-col gap-1">
-      <p className="text-base leading-snug">{sourceText}</p>
-      {sortedTranslations(segment.translations).map(([language, text]) => (
-        <AnimatedTranslationLine key={language} language={language} text={text} />
+    <div
+      className="flex h-6 items-center gap-1"
+      aria-label="Someone is speaking"
+    >
+      {[0, 150, 300].map((delay) => (
+        <span
+          key={delay}
+          className="size-1.5 animate-bounce rounded-full bg-muted-foreground/60"
+          style={{ animationDelay: `${delay}ms` }}
+        />
       ))}
     </div>
   );
@@ -274,23 +478,38 @@ function PendingSegment({ segment }: { segment: LiveSegment }) {
 function AnimatedTranslationLine({
   language,
   text,
+  provisional,
 }: {
   language: string;
   text: string;
+  provisional: boolean;
 }) {
   const animated = useTypewriterText(text);
-  return <TranslationLine language={language} text={animated} />;
+  return (
+    <TranslationLine
+      language={language}
+      text={animated}
+      provisional={provisional}
+    />
+  );
 }
 
 function TranslationLine({
   language,
   text,
+  provisional = false,
 }: {
   language: string;
   text: string;
+  provisional?: boolean;
 }) {
   return (
-    <p className="text-sm leading-snug text-muted-foreground italic">
+    <p
+      className={cn(
+        "text-sm leading-snug text-muted-foreground italic transition-opacity duration-300",
+        provisional && "opacity-60",
+      )}
+    >
       <span className="mr-1.5 rounded-full bg-foreground/5 px-1.5 py-0.5 text-[10px] font-medium tracking-wide uppercase not-italic">
         {languageLabel(language)}
       </span>

@@ -1,6 +1,6 @@
 /**
  * Bubble tints for speaker ids — the anonymous voice labels the live session
- * emits (SPEAKER_00, …) as well as the `speaker-1`, `speaker-2`, … ids we
+ * emits (voice_0, …) as well as the `speaker-1`, `speaker-2`, … ids we
  * assign for refinement. There's no concept of who a speaker "is"; colour and
  * the "Speaker N" label are the only cues distinguishing them.
  */
@@ -25,14 +25,14 @@ export function speakerTint(speakerId: string | null): string {
   return SPEAKER_TINTS[speakerIndex(speakerId) % SPEAKER_TINTS.length];
 }
 
-/** "Speaker 3" from a `speaker-3`/`SPEAKER_03`-style id; the raw id otherwise. */
+/** "Speaker 3" from a `speaker-3`/`voice_3`-style id; the raw id otherwise. */
 export function speakerLabel(speakerId: string | null): string {
   if (!speakerId) return "Unknown speaker";
   const trailingDigits = /(\d+)$/.exec(speakerId);
   return trailingDigits ? `Speaker ${Number(trailingDigits[1])}` : `Speaker ${speakerId}`;
 }
 
-/** Trailing digits of SPEAKER_07-style labels; a hash for anything else. */
+/** Trailing digits of voice_7-style labels; a hash for anything else. */
 function speakerIndex(speakerId: string): number {
   const trailingDigits = /(\d+)$/.exec(speakerId);
   if (trailingDigits) return Number(trailingDigits[1]);

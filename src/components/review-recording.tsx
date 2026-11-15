@@ -11,6 +11,7 @@ import {
   UploadIcon,
 } from "lucide-react";
 
+import RefineConfigDialog from "@/components/refine-config-dialog";
 import {
   formatAudioTime,
   speakerLabel,
@@ -56,10 +57,13 @@ export default function ReviewRecordingView({
 }: {
   recording: RecordingSession;
 }) {
+  const busy =
+    recording.status === "uploading" || recording.status === "refining";
+
+  // No previous transcript to show alongside the progress/error state.
   if (
-    recording.status === "uploading" ||
-    recording.status === "refining" ||
-    recording.status === "refine-error"
+    !recording.refined &&
+    (busy || recording.status === "refine-error")
   ) {
     return (
       <div className="mx-auto mt-8 w-full max-w-md">
@@ -92,6 +96,13 @@ export default function ReviewRecordingView({
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 pb-24">
       <RefinementAttachment recording={recording} />
+      {(busy || recording.status === "refine-error") && (
+        <p className="text-xs text-muted-foreground">
+          {busy
+            ? "Showing the previous transcript until the new one is ready."
+            : "Showing the previous transcript."}
+        </p>
+      )}
       <p className="text-xs text-muted-foreground">
         Detected language: {detected_language} · Duration:{" "}
         {formatAudioTime(duration)} · {turns.length} turns
@@ -111,9 +122,16 @@ export default function ReviewRecordingView({
         </div>
       )}
 
-      {turns.map((turn, index) => (
-        <TurnCard key={index} turn={turn} />
-      ))}
+      <div
+        className={cn(
+          "flex flex-col gap-4 transition-opacity",
+          busy && "opacity-60",
+        )}
+      >
+        {turns.map((turn, index) => (
+          <TurnCard key={index} turn={turn} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -248,6 +266,19 @@ function RefinementAttachment({ recording }: { recording: RecordingSession }) {
               : ""}
           </AttachmentDescription>
         </AttachmentContent>
+        {recording.audioBlob && (
+          <AttachmentActions>
+            <RefineConfigDialog
+              recording={recording}
+              trigger={
+                <AttachmentAction size="sm" variant="outline">
+                  <RefreshCwIcon data-icon="inline-start" />
+                  Refine again
+                </AttachmentAction>
+              }
+            />
+          </AttachmentActions>
+        )}
       </Attachment>
     );
   }

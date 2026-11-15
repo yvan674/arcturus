@@ -17,8 +17,11 @@ import {
   type PcmSamples,
 } from "@/lib/mock-audio";
 import {
+  confirmLiveSegmentSource,
+  endLiveTurn,
   setLiveSegmentSourceText,
   setLiveSegmentTranslation,
+  startLiveTurn,
   updateRecording,
   upsertLiveSegment,
 } from "@/lib/recordings-store";
@@ -39,7 +42,7 @@ const RECORDER_MIME_CANDIDATES = [
 /**
  * Drives one live transcription session: streams mic audio over WS /v1/live,
  * records the same chunks locally for /v1/refine, and writes every server
- * event into the recordings store (upsert by segment_id).
+ * event into the recordings store (turns by turn_id, segments by segment_id).
  *
  * With `mockAudio`, the microphone is replaced by res/test-45.mp3 played back
  * in real time as pcm16-24k frames — a debugging aid, dev builds only.
@@ -192,34 +195,58 @@ export function useLiveSession(
           }
           break;
         }
+        case "turn.started":
+          startLiveTurn(recordingId, event.turn_id, event.t0);
+          break;
+        case "turn.ended":
+          endLiveTurn(recordingId, event.turn_id);
+          break;
         case "transcript.source.delta":
           setLiveSegmentSourceText(
             recordingId,
             event.segment_id,
+            event.turn_id,
             event.revision,
             event.text,
           );
           break;
+        case "transcript.source.completed":
+          confirmLiveSegmentSource(recordingId, {
+            segmentId: event.segment_id,
+            turnId: event.turn_id,
+            sourceText: event.source_text,
+            t0: event.t0,
+            t1: event.t1,
+            speakerId: event.speaker_id,
+            speakerConfidence: event.speaker_confidence,
+          });
+          break;
         case "transcript.translation.update":
           // `event.source_text` is that snapshot's source, which can lag the
-          // current one — only the translations map is applied here.
+          // current one — only the translations map (and the medical terms,
+          // which are re-located against the displayed text) is applied.
           setLiveSegmentTranslation(
             recordingId,
             event.segment_id,
+            event.turn_id,
             event.revision,
             event.translations,
+            event.medical_terms ?? [],
           );
           break;
         case "segment.completed":
           upsertLiveSegment(recordingId, {
             segmentId: event.segment_id,
+            turnId: event.turn_id,
             t0: event.t0,
             t1: event.t1,
             sourceText: event.source_text,
+            sourceConfirmed: true,
             translations: event.translations,
             translationStatus: event.translation_status,
             speakerId: event.speaker_id,
             speakerConfidence: event.speaker_confidence,
+            medicalTerms: event.medical_terms ?? [],
             completed: true,
           });
           break;

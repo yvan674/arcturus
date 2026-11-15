@@ -21,12 +21,12 @@ export interface SessionStartMessage {
   /**
    * Upper bound on how many distinct voices the diarizer looks for. The server
    * does not know who the participants are — segments come back with anonymous
-   * voice labels (e.g. SPEAKER_00) and mapping them to people is our job.
+   * voice labels (e.g. voice_0) and mapping them to people is our job.
    */
   max_speakers: number;
   /**
-   * Everything gets translated into each of these languages (≥ 1). Each entry
-   * costs one upstream translation session, so keep it to what we render.
+   * Everything gets translated into each of these languages (≥ 1). All of
+   * them share each translation request, so keep it to what we render.
    */
   target_languages: string[];
   /**
@@ -43,9 +43,40 @@ export interface SessionStartMessage {
   audio: { format: "webm-opus" | "pcm16-24k" };
 }
 
+/**
+ * A potential medical term the live LLM flagged as possibly misheard by speech
+ * recognition. `start`/`end` are Unicode code-point offsets into the
+ * `source_text` of the event that carried it (not necessarily the text on
+ * screen) — re-locate `text` if they no longer line up.
+ */
+export interface MedicalTerm {
+  text: string;
+  start: number;
+  end: number;
+}
+
 /** Server → client events on WS /v1/live. */
 export type LiveServerEvent =
   | { type: "session.ready" }
+  | {
+      /**
+       * VAD detected speech (~0.4 s in), before any text exists. A turn is one
+       * continuous stretch of speech; its segments (sentences) follow with
+       * this `turn_id`. Turns are not speaker-attributed.
+       */
+      type: "turn.started";
+      turn_id: string;
+      t0: number;
+    }
+  | {
+      /**
+       * The turn is fully transcribed: no new segments follow, though existing
+       * ones may still get translation/completion/speaker events. A turn that
+       * ends without any segment was noise — drop its bubble.
+       */
+      type: "turn.ended";
+      turn_id: string;
+    }
   | {
       /**
        * Full source hypothesis for the segment, replacing whatever was shown
@@ -56,8 +87,25 @@ export type LiveServerEvent =
        */
       type: "transcript.source.delta";
       segment_id: string;
+      turn_id: string;
       revision: number;
       text: string;
+    }
+  | {
+      /**
+       * Confirmed STT output plus the current speaker, sent before the final
+       * LLM correction/translation runs. Carries no translations — keep any
+       * provisional ones visibly provisional until segment.completed. No
+       * further deltas or partial translations follow for this segment.
+       */
+      type: "transcript.source.completed";
+      segment_id: string;
+      turn_id: string;
+      source_text: string;
+      t0: number;
+      t1: number;
+      speaker_id: string | null;
+      speaker_confidence: number | null;
     }
   | {
       /**
@@ -68,15 +116,20 @@ export type LiveServerEvent =
        */
       type: "transcript.translation.update";
       segment_id: string;
+      turn_id: string;
       revision: number;
       source_text: string;
       translations: Record<string, string>;
+      /** Offsets refer to this event's (raw STT) `source_text`. */
+      medical_terms: MedicalTerm[];
     }
   | {
       type: "segment.completed";
       segment_id: string;
+      turn_id: string;
       t0: number;
       t1: number;
+      /** LLM-corrected source text. */
       source_text: string;
       /**
        * ISO 639-1 code → full translated text, one entry per
@@ -88,9 +141,11 @@ export type LiveServerEvent =
       translations: Record<string, string>;
       /** "failed" closes the segment without claiming provisional translations were final. */
       translation_status: "completed" | "failed";
-      /** Anonymous voice label (e.g. SPEAKER_00), stable within the session. */
+      /** Anonymous voice label (e.g. voice_0), stable within the session. */
       speaker_id: string | null;
       speaker_confidence: number | null;
+      /** Offsets refer to this event's corrected `source_text`; empty on failure. */
+      medical_terms: MedicalTerm[];
     }
   | {
       type: "speaker.update";

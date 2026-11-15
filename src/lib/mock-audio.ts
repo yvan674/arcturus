@@ -1,7 +1,7 @@
 /**
- * Development-only mock microphone: `res/test-45.mp3` decoded to the raw PCM
- * the live session accepts (`pcm16-24k`), so a session can be driven without
- * anyone speaking. Only reachable while `NODE_ENV === "development"`.
+ * Mock microphone: `res/test-45.mp3` decoded to the raw PCM the live session
+ * accepts (`pcm16-24k`), so a session can be driven without anyone speaking.
+ * Available in every environment, since this app is an internal testing tool.
  */
 
 /** Matches the backend's `pcm16-24k` format: mono, little-endian, 24 kHz. */
@@ -17,8 +17,6 @@ const MOCK_AUDIO_URL = "/api/dev/mock-audio";
 
 /** PCM16 samples backed by a plain ArrayBuffer, as Blob and WebSocket want. */
 export type PcmSamples = Int16Array<ArrayBuffer>;
-
-export const isMockAudioAvailable = process.env.NODE_ENV === "development";
 
 /** Fetches and decodes the mock recording into 24 kHz mono PCM16 samples. */
 export async function loadMockAudioSamples(): Promise<PcmSamples> {

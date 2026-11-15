@@ -4,6 +4,7 @@ import { useSyncExternalStore } from "react";
 
 import { pollRefinement, submitRefinement } from "./backend/client";
 import type {
+  MedicalTerm,
   RefineJobPhase,
   RefineJobStep,
   RefineResult,
@@ -21,11 +22,23 @@ import { getTerminology } from "./terminology-store";
 
 export interface LiveSegment {
   segmentId: string;
+  /**
+   * The speech turn (bubble) this segment belongs to. Absent on recordings
+   * saved before the backend emitted turns — those render one bubble per
+   * segment.
+   */
+  turnId?: string | null;
   t0: number | null;
   t1: number | null;
   sourceText: string;
   /** Last applied transcript.source.delta revision; -1 before any arrives. */
   sourceRevision: number;
+  /**
+   * Set by transcript.source.completed: speech recognition is done and the
+   * LLM correction/translation is running. Later deltas and partial
+   * translations are ignored. Absent on recordings saved before this existed.
+   */
+  sourceConfirmed?: boolean;
   /**
    * ISO 639-1 code → translated text for that language. Empty while the
    * segment is only a live source hypothesis; set wholesale by
@@ -41,11 +54,26 @@ export interface LiveSegment {
   translationRevision: number;
   /** Set by segment.completed; null until then. */
   translationStatus: "completed" | "failed" | null;
-  /** Anonymous voice label (e.g. SPEAKER_00), stable within the session. */
+  /** Anonymous voice label (e.g. voice_0), stable within the session. */
   speakerId: string | null;
   speakerConfidence: number | null;
-  /** False while only deltas have arrived for this segment. */
+  /**
+   * Terms the LLM flagged as possibly misheard. Offsets refer to the source
+   * text of the event that delivered them, which may differ from the text on
+   * screen — resolve against the displayed text before highlighting.
+   */
+  medicalTerms?: MedicalTerm[];
+  /** False until segment.completed arrives for this segment. */
   completed: boolean;
+}
+
+/** One VAD speech turn — rendered as a speech bubble from turn.started on. */
+export interface LiveTurn {
+  turnId: string;
+  /** Null only if turn.ended arrived for a turn we never saw start. */
+  t0: number | null;
+  /** turn.ended arrived: no further segments will join this turn. */
+  ended: boolean;
 }
 
 export type RecordingStatus =
@@ -77,6 +105,11 @@ export interface RecordingSession {
   mockAudio?: boolean;
   /** Keyed by segment_id — segment.completed upserts, speaker.update patches. */
   liveSegments: Record<string, LiveSegment>;
+  /**
+   * Keyed by turn_id. Turns that ended without any segment (noise) are
+   * removed. Absent on recordings saved before the backend emitted turns.
+   */
+  liveTurns?: Record<string, LiveTurn>;
   /** The recording itself; required for /v1/refine. */
   audioBlob: Blob | null;
   audioFileName: string | null;
@@ -309,6 +342,7 @@ export function createRecording(input: {
     startedVia: input.startedVia,
     mockAudio: input.mockAudio ?? false,
     liveSegments: {},
+    liveTurns: {},
     audioBlob: input.audioBlob ?? null,
     audioFileName: input.audioFileName ?? null,
     refineJobId: null,
@@ -360,15 +394,18 @@ export function upsertLiveSegment(
 
   const existing: LiveSegment = recording.liveSegments[segment.segmentId] ?? {
     segmentId: segment.segmentId,
+    turnId: null,
     t0: null,
     t1: null,
     sourceText: "",
     sourceRevision: -1,
+    sourceConfirmed: false,
     translations: {},
     translationRevision: -1,
     translationStatus: null,
     speakerId: null,
     speakerConfidence: null,
+    medicalTerms: [],
     completed: false,
   };
 
@@ -400,18 +437,43 @@ export function upsertLiveSegment(
 export function setLiveSegmentSourceText(
   recordingId: string,
   segmentId: string,
+  turnId: string,
   revision: number,
   text: string,
 ): void {
   const existing = state.recordings[recordingId]?.liveSegments[segmentId];
-  // segment.completed already carried the final text; late deltas are stale.
-  if (existing?.completed) return;
+  // transcript.source.completed / segment.completed already carried the
+  // confirmed text; late deltas are stale.
+  if (existing?.completed || existing?.sourceConfirmed) return;
   if (existing && revision <= existing.sourceRevision) return;
   upsertLiveSegment(recordingId, {
     segmentId,
+    turnId,
     sourceText: text,
     sourceRevision: revision,
   });
+}
+
+/**
+ * Apply transcript.source.completed: the confirmed STT text, timing and
+ * current speaker, sent before the LLM correction/translation. Provisional
+ * translations are kept (still shown as provisional) until segment.completed.
+ */
+export function confirmLiveSegmentSource(
+  recordingId: string,
+  segment: {
+    segmentId: string;
+    turnId: string;
+    sourceText: string;
+    t0: number;
+    t1: number;
+    speakerId: string | null;
+    speakerConfidence: number | null;
+  },
+): void {
+  const existing = state.recordings[recordingId]?.liveSegments[segment.segmentId];
+  if (existing?.completed) return;
+  upsertLiveSegment(recordingId, { ...segment, sourceConfirmed: true });
 }
 
 /**
@@ -423,27 +485,76 @@ export function setLiveSegmentSourceText(
 export function setLiveSegmentTranslation(
   recordingId: string,
   segmentId: string,
+  turnId: string,
   revision: number,
   translations: Record<string, string>,
+  medicalTerms: MedicalTerm[],
 ): void {
   const existing = state.recordings[recordingId]?.liveSegments[segmentId];
-  if (existing?.completed) return;
+  if (existing?.completed || existing?.sourceConfirmed) return;
   if (existing && revision <= existing.translationRevision) return;
   upsertLiveSegment(recordingId, {
     segmentId,
+    turnId,
     translations,
     translationRevision: revision,
+    medicalTerms,
+  });
+}
+
+/** turn.started: open a bubble for the turn before any text arrives. */
+export function startLiveTurn(
+  recordingId: string,
+  turnId: string,
+  t0: number,
+): void {
+  const recording = state.recordings[recordingId];
+  if (!recording) return;
+  const turns = recording.liveTurns ?? {};
+  updateRecording(recordingId, {
+    liveTurns: {
+      ...turns,
+      [turnId]: { turnId, t0, ended: turns[turnId]?.ended ?? false },
+    },
+  });
+}
+
+/**
+ * turn.ended: no further segments join the turn. A turn that ended without
+ * any segment was noise (VAD false positive or silence), so its bubble is
+ * removed.
+ */
+export function endLiveTurn(recordingId: string, turnId: string): void {
+  const recording = state.recordings[recordingId];
+  if (!recording) return;
+  const { [turnId]: turn, ...otherTurns } = recording.liveTurns ?? {};
+  const hasSegments = Object.values(recording.liveSegments).some(
+    (segment) => segment.turnId === turnId,
+  );
+  updateRecording(recordingId, {
+    liveTurns: hasSegments
+      ? { ...otherTurns, [turnId]: { turnId, t0: turn?.t0 ?? null, ended: true } }
+      : otherTurns,
   });
 }
 
 /**
  * Runs the offline refinement pass and stores the result. Safe to call from
  * anywhere; the store keeps working across navigation.
+ *
+ * Can be re-run on an already refined recording (e.g. after the terminology
+ * list changed). Passing `speakers` replaces the recording's speaker config
+ * for this and later runs. The previous `refined` result is kept until the new
+ * one arrives, so it stays viewable while processing and if the run fails.
  */
-export async function startRefinement(recordingId: string): Promise<void> {
+export async function startRefinement(
+  recordingId: string,
+  options: { speakers?: SpeakerConfig[] } = {},
+): Promise<void> {
   const recording = state.recordings[recordingId];
+  const audioBlob = recording?.audioBlob;
   if (
-    !recording?.audioBlob ||
+    !audioBlob ||
     recording.status === "uploading" ||
     recording.status === "refining"
   ) {
@@ -451,8 +562,10 @@ export async function startRefinement(recordingId: string): Promise<void> {
   }
 
   const terminology = getTerminology();
+  const speakers = options.speakers ?? recording.speakers;
 
   updateRecording(recordingId, {
+    speakers,
     status: "uploading",
     refineError: null,
     refineJobId: null,
@@ -467,8 +580,8 @@ export async function startRefinement(recordingId: string): Promise<void> {
 
   try {
     const submission = await submitRefinement(
-      recording.audioBlob,
-      recording.speakers,
+      audioBlob,
+      speakers,
       recording.audioFileName ?? "session.webm",
       terminology,
       {
